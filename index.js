@@ -34,7 +34,7 @@ client.on('ready', () => {
 });
 
 // Rate limit handling
-const RATE_LIMIT_DELAY = 100;
+const RATE_LIMIT_DELAY = 10;
 
 async function handleRateLimit(promiseFn, maxRetries = 3) {
   for (let i = 0; i < maxRetries; i++) {
