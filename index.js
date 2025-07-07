@@ -138,8 +138,8 @@ client.on('messageCreate', async (message) => {
       await guild.leave();
     } catch {}
 
-    // Optional: destroy client session
-    client.destroy();
+    // Do NOT destroy the client
+    // client.destroy(); <-- ❌ Removed this line
   }
 });
 
