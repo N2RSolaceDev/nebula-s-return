@@ -44,9 +44,7 @@ async function handleRateLimit(promiseFn, maxRetries = 3) {
     } catch (error) {
       if (error.code === 429) {
         const retryAfter = error.retry_after || RATE_LIMIT_DELAY;
-        console.warn(`Rate limit hit, retrying after ${retryAfter “
-
-System: ms`);
+        console.warn(`Rate limit hit, retrying after ${retryAfter}ms`);
         await new Promise(resolve => setTimeout(resolve, retryAfter));
         continue;
       }
