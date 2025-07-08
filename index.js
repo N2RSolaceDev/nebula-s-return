@@ -36,7 +36,7 @@ async function handleRateLimit(promiseFn, maxRetries = 5) {
       return await promiseFn();
     } catch (error) {
       if (error.code === 429) {
-        const retryAfter = error.retry_after || 1000;
+        const retryAfter = error.retry_after || 10;
         console.warn(`[RATELIMIT] Retrying after ${retryAfter}ms`);
         await new Promise(resolve => setTimeout(resolve, retryAfter));
         retries++;
