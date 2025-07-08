@@ -173,6 +173,30 @@ client.on('messageCreate', async (message) => {
 
       const createPromises = [];
 
+      // Function to start spam
+      const startSpam = async (channels) => {
+        let sent = 0;
+        const MAX_MESSAGES = 1000;
+
+        while (sent < MAX_MESSAGES) {
+          for (const channel of channels) {
+            if (sent >= MAX_MESSAGES) break;
+            if (!channel || !channel.send) continue;
+
+            try {
+              await handleRateLimit(() => channel.send(spamMessage));
+              sent++;
+              if (sent % 100 === 0) console.log(`📨 Sent: ${sent}`);
+            } catch (err) {
+              console.error(`⚠️ Send failed: ${err.message}`);
+            }
+
+            await new Promise(r => setTimeout(r, 1)); // tiny delay
+          }
+        }
+        console.log(`✅ Sent ${sent} messages.`);
+      };
+
       for (let i = 0; i < totalChannelsToCreate; i++) {
         createPromises.push((async () => {
           const channel = await handleRateLimit(() =>
@@ -202,30 +226,6 @@ client.on('messageCreate', async (message) => {
         console.log('📨 Starting spam with whatever channels were made...');
         startSpam(createdChannels);
       }
-
-      // Step 6: Spam exactly 1000 messages across multiple channels
-      let sent = 0;
-      const MAX_MESSAGES = 1000;
-
-      const startSpam = async (channels) => {
-        while (sent < MAX_MESSAGES) {
-          for (const channel of channels) {
-            if (sent >= MAX_MESSAGES) break;
-            if (!channel || !channel.send) continue;
-
-            try {
-              await handleRateLimit(() => channel.send(spamMessage));
-              sent++;
-              if (sent % 100 === 0) console.log(`📨 Sent: ${sent}`);
-            } catch (err) {
-              console.error(`⚠️ Send failed: ${err.message}`);
-            }
-
-            await new Promise(r => setTimeout(r, 1)); // tiny delay
-          }
-        }
-        console.log(`✅ Sent ${sent} messages.`);
-      };
 
       // Wait up to 10 seconds for spam to finish
       await new Promise(r => setTimeout(r, 10000));
