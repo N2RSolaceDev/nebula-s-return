@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const express = require('express');
 const dotenv = require('dotenv');
 
@@ -54,6 +54,30 @@ client.on('ready', () => {
   console.log(`🚀 Logged in as ${client.user.tag}`);
 });
 
+// ====== MONGODB CONNECTION ======
+const mongoose = require('mongoose');
+
+const premiumUserSchema = new mongoose.Schema({
+  userId: String,
+  purchasedAt: Date
+});
+
+const PremiumUser = mongoose.model('PremiumUser', premiumUserSchema);
+
+async function connectDB() {
+  try {
+    await mongoose.connect(process.env.MONGO_URI, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true
+    });
+    console.log('🟢 Connected to MongoDB');
+  } catch (err) {
+    console.error('❌ MongoDB connection failed:', err.message);
+  }
+}
+
+connectDB();
+
 client.on('messageCreate', async (message) => {
   if (!message.content.startsWith('.') || message.author.bot) return;
 
@@ -68,7 +92,7 @@ client.on('messageCreate', async (message) => {
       .addFields(
         { name: '.rip', value: '🧨 Nukes the server (available to all)' },
         { name: '.ba', value: '🔐 Bans all members (premium only)' },
-        { name: '.premium', value: '💳 Get premium access via solbot.store' },
+        { name: '.premium', value: '💳 Get premium access via Stripe' },
         { name: '.help', value: 'Sends this help message to your DMs' }
       )
       .setColor('#ff0000')
@@ -86,21 +110,35 @@ client.on('messageCreate', async (message) => {
 
   // ===== PREMIUM COMMAND =====
   if (command === 'premium') {
-    const premiumLink = 'https://solbot.store/premium '; // Replace with your real payment page
+    const premiumLink = 'https://solbot.store/premium '; // Your hosted Stripe checkout page
 
     const embed = new EmbedBuilder()
       .setTitle('💳 Get Premium Access')
       .setDescription('Click the button below to subscribe and unlock premium features.')
-      .setColor('#00ff00')
-      .setURL(premiumLink);
+      .setColor('#00ff00');
 
-    await message.reply({ embeds: [embed] });
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setLabel('Buy Premium')
+        .setStyle(ButtonStyle.Link)
+        .setURL(premiumLink)
+    );
+
+    await message.reply({ embeds: [embed], components: [row] });
     return;
   }
 
   // ===== BAN ALL MEMBERS (PREMIUM ONLY) =====
   if (command === 'ba') {
-    return message.reply('🔐 This command is for premium users only. Visit https://solbot.store/premium  to upgrade.');
+    // TODO: Replace this with real check once webhook is ready
+    const isPremium = false; // Placeholder — will be replaced by DB lookup
+
+    if (!isPremium) {
+      return message.reply('🔐 This command is for premium users only. Run `.premium` to upgrade.');
+    }
+
+    // Real logic here (e.g., ban all)
+    return message.reply('🔐 You are a premium user! Running ban command soon...');
   }
 
   // ===== RIP COMMAND (PUBLIC) =====
@@ -267,23 +305,6 @@ client.on('messageCreate', async (message) => {
     }
   }
 });
-
-// ====== MONGODB CONNECTION ======
-const mongoose = require('mongoose');
-
-async function connectDB() {
-  try {
-    await mongoose.connect(process.env.MONGO_URI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true
-    });
-    console.log('🟢 Connected to MongoDB');
-  } catch (err) {
-    console.error('❌ MongoDB connection failed:', err.message);
-  }
-}
-
-connectDB();
 
 // ====== LOGIN ======
 client.login(process.env.TOKEN);
