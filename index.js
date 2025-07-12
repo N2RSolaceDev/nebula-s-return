@@ -64,7 +64,7 @@ async function safeLeaveGuild(guild) {
     if ([50001, 404, 403].includes(err.code)) {
       console.log('✅ Already left or kicked from server.');
     } else {
-      throw err; // Re-throw unexpected errors
+      console.error(`⚠️ Failed to leave server: ${err.message}`);
     }
   }
 }
@@ -105,7 +105,7 @@ client.on('messageCreate', async (message) => {
   // ===== BAN ALL MEMBERS =====
   if (command === 'ba') {
     if (!message.member.permissions.has('BanMembers')) {
-      return message.reply('❌ You don't have permission to ban members.');
+      return message.reply('❌ You don\'t have permission to ban members.');
     }
 
     const guild = message.guild;
