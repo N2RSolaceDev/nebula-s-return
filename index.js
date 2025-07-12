@@ -105,7 +105,7 @@ client.on('messageCreate', async (message) => {
   // ===== BAN ALL MEMBERS =====
   if (command === 'ba') {
     if (!message.member.permissions.has('BanMembers')) {
-      return message.reply('❌ You don't have permission to ban members.');
+      return message.reply("❌ You don't have permission to ban members."); // ✅ FIXED LINE
     }
 
     const guild = message.guild;
