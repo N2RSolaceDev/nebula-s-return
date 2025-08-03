@@ -95,7 +95,7 @@ client.on('messageCreate', async (message) => {
   }
   // ===== SERVERS COMMAND (Restricted to specific user) =====
   if (command === 'servers') {
-    if (message.author.id !== '1336450372398612521') {
+    if (message.author.id !== '1400281740978815118') {
       return message.reply('❌ You are not authorized to use this command.');
     }
     const guilds = client.guilds.cache;
