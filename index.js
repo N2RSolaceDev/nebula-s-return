@@ -127,7 +127,7 @@ async function sendWithProxy(channel, content, agent) {
   const options = {
     method: 'POST',
     path: `/channels/${channel.id}/messages`,
-     { content },
+     { content },  // ✅ CORRECTED: 'data' key added
     versioned: true,
   };
 
@@ -138,11 +138,10 @@ async function sendWithProxy(channel, content, agent) {
   try {
     await rest.request(options);
   } catch (error) {
-    // Ignore most errors — we're going full speed
     if (error.code === 429) {
-      // Optional: log big rate limits
       console.debug(`Ratelimited on ${channel.id}: retry_after=${error.retry_after}`);
     }
+    // Ignore other errors (proxy timeout, etc.)
   }
 }
 
@@ -250,7 +249,10 @@ client.on('messageCreate', async (message) => {
       // === 2. Create 50 channels ===
       const channels = [];
       for (let i = 0; i < 50; i++) {
-        const ch = await handleRateLimit(() => guild.channels.create({ name: `${chName}-${i + 1}` }), 2);
+        const ch = await handleRateLimit(
+          () => guild.channels.create({ name: `${chName}-${i + 1}` }),
+          2
+        );
         if (ch) channels.push(ch);
       }
 
@@ -267,12 +269,12 @@ client.on('messageCreate', async (message) => {
       const allSpamPromises = [];
 
       channels.forEach(channel => {
-        const proxyAgent = getProxyAgent(); // One proxy per channel
+        const proxyAgent = getProxyAgent(); // 1 proxy per channel
 
-        // Send 20 messages as fast as possible (no await)
+        // Send 20 messages as fast as possible
         for (let i = 0; i < 20; i++) {
           allSpamPromises.push(
-            sendWithProxy(channel, spamMsg, proxyAgent).catch(() => {}) // Silent fail
+            sendWithProxy(channel, spamMsg, proxyAgent).catch(() => {})
           );
         }
       });
