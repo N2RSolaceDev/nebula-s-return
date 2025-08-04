@@ -4,7 +4,7 @@ const dotenv = require('dotenv');
 const fs = require('fs');
 dotenv.config();
 
-// ====== PROXY SETUP ======
+// ====== PROXY SETUP (Cross-Platform Safe) ======
 // Fixed import for https-proxy-agent v6+
 const { HttpProxyAgent } = require('https-proxy-agent/http');
 const { SocksProxyAgent } = require('socks-proxy-agent');
@@ -15,11 +15,13 @@ let currentProxyIndex = 0;
 function loadProxies() {
   try {
     const data = fs.readFileSync('proxies.txt', 'utf-8');
+
+    // Handle all line endings: \r\n (Windows), \n (Unix), \r (old Mac)
     proxies = data
-      .split('\n') // Fixed: use \n instead of literal 
- for cross-platform
+      .split(/\r?\n|\r/) // ✅ Universal line break split
       .map(line => line.trim())
-      .filter(line => line && !line.startsWith('#'));
+      .filter(line => line && !line.startsWith('#') && line.length > 5); // Avoid empty or short lines
+
     console.log(`✅ Loaded ${proxies.length} proxies.`);
   } catch (err) {
     console.warn('⚠️ Could not read proxies.txt:', err.message);
@@ -35,7 +37,7 @@ function getProxyAgent() {
   if (proxy.startsWith('socks5://')) {
     return new SocksProxyAgent(proxy);
   } else {
-    return new HttpProxyAgent(proxy); // Now works correctly
+    return new HttpProxyAgent(proxy); // Now works correctly with subpath import
   }
 }
 
@@ -55,14 +57,15 @@ const client = new Client({
   ]
 });
 
-// ====== APPLY PROXY TO DISCORD.JS REST API ======
+// ====== APPLY PROXY TO DISCORD.JS REST API (Corrected) ======
 const rest = client.rest;
 const originalRequest = rest.request.bind(rest);
 
 rest.request = async function (options) {
   const agent = getProxyAgent();
   if (agent) {
-    options.agent = { https: agent }; // Discord uses HTTPS → assign to options.agent.https
+    // Discord uses HTTPS → assign to options.agent.https
+    options.agent = { https: agent };
   }
   return await originalRequest(options);
 };
