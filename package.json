@@ -26,8 +26,7 @@
     "mongoose": "^8.5.0",
     "stripe": "^16.1.0",
     "https-proxy-agent": "^7.0.5",
-    "socks-proxy-agent": "^8.0.4",
-    "node-fetch": "^3.3.2"
+    "socks-proxy-agent": "^8.0.4"
   },
   "devDependencies": {
     "nodemon": "^3.1.0"
